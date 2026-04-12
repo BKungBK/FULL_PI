@@ -43,6 +43,20 @@ import requests
 import tflite_runtime.interpreter as tflite
 from concurrent.futures import ThreadPoolExecutor
 
+# ── Suppress known cosmetic bug in tflite_runtime Delegate.__del__ ────
+# When load_delegate() fails (e.g. XNNPACK not available), the Delegate
+# object is only partially constructed.  Python's GC then calls __del__
+# which crashes on "object has no attribute '_library'".  We patch it
+# once here so the AttributeError is silently absorbed.
+_orig_delegate_del = getattr(tflite.Delegate, "__del__", None)
+def _safe_delegate_del(self: tflite.Delegate) -> None:
+    try:
+        if _orig_delegate_del:
+            _orig_delegate_del(self)
+    except AttributeError:
+        pass
+tflite.Delegate.__del__ = _safe_delegate_del  # type: ignore[method-assign]
+
 # ── shared state (thread-safe singleton for UI + server) ──────────────
 try:
     from shared_state import system_state
