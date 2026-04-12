@@ -1011,41 +1011,69 @@ function sendRoi() {
 ═══════════════════════════════════════════════════════════ */
 let camRetry=null;
 let _camLoadTimer=null;
+let _camDirectMode=false;   // true = bypass Pi proxy, hit ESP32 directly
+let _espIpCache='';
+
+// Fetch ESP32 IP once from server for direct-mode fallback
+api('GET','/api/cam-info').then(r=>{
+  if(r.ok && r.data.esp32_ip){
+    _espIpCache=r.data.esp32_ip;
+    // Update settings panel
+    const si=document.getElementById('s-ip');
+    if(si && !si.value) si.value=_espIpCache;
+  }
+});
+
+function _camStreamUrl(){
+  if(_camDirectMode && _espIpCache)
+    return `http://${_espIpCache}:81/stream?t=${Date.now()}`;
+  return `${HOST}/api/stream?t=${Date.now()}`;
+}
+
 function startCam() {
   const img=document.getElementById('cam-img');
   const off=document.getElementById('cam-off');
   clearTimeout(camRetry);
   clearTimeout(_camLoadTimer);
 
-  // Reset state — show offline placeholder while loading
   img.style.opacity='0';
   off.style.display='flex';
-  off.innerHTML='<div class="ico" style="animation:sbpulse .8s infinite alternate">◼</div><div>Connecting…</div>';
+  const modeLabel=_camDirectMode?'Direct':'Proxy';
+  off.innerHTML=`<div class="ico" style="animation:sbpulse .8s infinite alternate">◼</div><div>Connecting… (${modeLabel})</div>`;
 
   img.onload=()=>{
     off.style.display='none';
     img.style.opacity='1';
     clearTimeout(_camLoadTimer);
+    _camDirectMode=false; // reset for next attempt
   };
+
   img.onerror=()=>{
     img.style.opacity='0';
-    off.style.display='flex';
-    off.innerHTML='<div class="ico">◼</div><div>No stream</div>';
-    camRetry=setTimeout(startCam,4000);
-  };
-
-  // For MJPEG streams: browser fires onload on first frame.
-  // If no frame arrives within 6s, treat as offline.
-  _camLoadTimer=setTimeout(()=>{
-    if(img.style.opacity!=='1'){
-      img.src='';
+    clearTimeout(_camLoadTimer);
+    // If proxy failed, try direct mode once
+    if(!_camDirectMode && _espIpCache){
+      _camDirectMode=true;
+      off.innerHTML='<div class="ico" style="animation:sbpulse .8s infinite alternate">◼</div><div>Trying direct…</div>';
+      setTimeout(startCam,500);
+    } else {
+      _camDirectMode=false;
       off.style.display='flex';
       off.innerHTML='<div class="ico">◼</div><div>No stream</div>';
-      camRetry=setTimeout(startCam,4000);
+      camRetry=setTimeout(startCam,5000);
     }
-  },6000);
+  };
 
-  img.src=`${HOST}/api/stream?t=${Date.now()}`;
+  // MJPEG: browser fires onload on first frame received.
+  // Timeout if no frame arrives — longer for direct mode (possible higher latency).
+  const timeoutMs = _camDirectMode ? 10000 : 8000;
+  _camLoadTimer=setTimeout(()=>{
+    if(img.style.opacity!=='1'){
+      img.onerror(); // trigger fallback logic
+    }
+  }, timeoutMs);
+
+  img.src=_camStreamUrl();
 }
 
 /* ═══════════════════════════════════════════════════════════
