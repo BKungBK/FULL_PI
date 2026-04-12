@@ -1,47 +1,30 @@
-# ================================================================
-# SmartBin V2 — Python Requirements
-# Raspberry Pi 5  |  Python 3.11+
-# ================================================================
-#
-# Install all at once:
-#   pip install -r requirements.txt
-#
-# ── IMPORTANT: packages NOT available via pip (install separately) ─
-#   ncnn              → pip install ncnn
-#   tflite-runtime    → pip install tflite-runtime
-#                       (หรือ pip install tflite-runtime --index-url
-#                        https://google-coral.github.io/py-repo/)
-#   lgpio             → pip install lgpio   (Pi 5 GPIO)
-#   opencv for Pi     → pip install opencv-python-headless
-#                        (ถ้า desktop มี display ใช้ opencv-python)
-# ================================================================
+# SmartBin V2 - Python Requirements
+# Raspberry Pi 5 | Python 3.10+
+# Install: pip install -r requirements.txt
 
-# ── Computer Vision ───────────────────────────────────────────────
-opencv-python-headless>=4.8.0   # cv2  (headless = ไม่ต้องการ GUI libs)
-# ⚠️  CRITICAL: tflite-runtime ถูก build กับ NumPy 1.x
-# NumPy 2.x ลบ numpy.core API → ImportError: numpy.core.multiarray failed to import
-# ต้อง pin ไว้ที่ <2 เสมอ!
-numpy<2                         # MUST be <2.0 — tflite-runtime ABI incompatible with NumPy 2.x
+# ── Computer Vision ──────────────────────────────────────────────
+opencv-python-headless>=4.8.0
 
-# ── AI / Inference ────────────────────────────────────────────────
-ncnn                            # YOLO Stage-1 detector (NCNN Python binding)
-tflite-runtime>=2.13.0          # EfficientNet Stage-2 classifier  ← Pi build
+# CRITICAL: tflite-runtime was compiled with NumPy 1.x C API.
+# NumPy 2.x removed numpy.core -> ImportError on tflite load.
+# Must stay below 2.0.
+numpy<2
 
-# ── Hardware (Raspberry Pi 5 only) ────────────────────────────────
-lgpio>=0.2.2                    # GPIO on Pi 5 (replaces RPi.GPIO)
-requests>=2.31.0                # ESP32-CAM HTTP control + flash
+# ── AI / Inference ───────────────────────────────────────────────
+ncnn
+tflite-runtime>=2.13.0
 
-# ── Desktop UI ────────────────────────────────────────────────────
-customtkinter>=5.2.0            # Modern Tkinter UI framework
-Pillow>=10.0.0                  # PIL — image decode for camera feed
-matplotlib>=3.7.0               # 4-chart evaluation graphs (TkAgg backend)
+# ── Hardware (Raspberry Pi 5 only) ───────────────────────────────
+lgpio>=0.2.2
+requests>=2.31.0
 
-# ── Web API Server (for ui.html browser access) ───────────────────
-fastapi>=0.111.0                # REST + WebSocket API
-uvicorn[standard]>=0.29.0       # ASGI server (runs FastAPI)
-httpx>=0.27.0                   # async MJPEG proxy inside FastAPI
-pydantic>=2.0.0                 # request body models (FastAPI dep)
+# ── Desktop UI ───────────────────────────────────────────────────
+customtkinter>=5.2.0
+Pillow>=10.0.0
+matplotlib>=3.7.0
 
-# ── stdlib only (no install needed) ───────────────────────────────
-# asyncio, collections, csv, dataclasses, enum, logging, os,
-# pathlib, queue, signal, socket, sys, threading, time, typing
+# ── Web API Server ────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+httpx>=0.27.0
+pydantic>=2.0.0

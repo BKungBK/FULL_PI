@@ -189,11 +189,12 @@ class SmartBinApp(ctk.CTk):
         self.configure(fg_color=BG_0)
 
         # Internal state
-        self._active_tab   = "dashboard"
+        self._active_tab    = "dashboard"
         self._cam_thread:   Optional[CameraThread] = None
         self._frame_q:      queue.Queue = queue.Queue(maxsize=2)
         self._cam_img_ref   = None          # prevent GC
         self._engine_thread: Optional[threading.Thread] = None
+        self._engine_ref    = None          # SmartBinEngine instance
         self._server_running = False
         self._last_snap:    dict = {}
         self._prev_hist_len = 0
@@ -1119,25 +1120,69 @@ class SmartBinApp(ctk.CTk):
     def _start_engine(self) -> None:
         if self._last_snap.get("engine_running"):
             return
+        if self._engine_thread and self._engine_thread.is_alive():
+            return
 
-        def _run():
+        self._engine_ref = None   # will hold SmartBinEngine instance
+
+        def _run() -> None:
             try:
+                # ── Import engine module (only once — no reload) ──────
                 import main as eng
-                import importlib
-                importlib.reload(eng)
-                system_state.update(engine_running=True)
-                eng.main()
+
+                # ── Instantiate SmartBinEngine directly ───────────────
+                # DO NOT call eng.main() — it tries to register UNIX
+                # signals (signal.signal) which is only allowed in the
+                # main OS thread and raises ValueError silently here.
+                engine = eng.SmartBinEngine()
+                self._engine_ref = engine
+
+                self.after(0, lambda: self._eng_lbl.configure(
+                    text="⬤  Starting…", text_color=AMBER))
+
+                engine.setup()   # ESP32 scan, model load, GPIO, camera
+
+                self.after(0, lambda: self._eng_lbl.configure(
+                    text="⬤  Running", text_color=EMERALD))
+
+                engine.run()     # blocks until stop command or Ctrl-C
+
             except Exception as exc:
-                print(f"[Engine] Error: {exc}")
+                import traceback
+                err_short = str(exc) or type(exc).__name__
+                err_full  = traceback.format_exc()
+                print(f"[Engine] ERROR:\n{err_full}")
+                # Show error in UI safely from this thread
+                self.after(0, lambda e=err_short: self._show_engine_error(e))
             finally:
                 system_state.update(engine_running=False)
+                self.after(0, lambda: self._eng_lbl.configure(
+                    text="⬤  Stopped", text_color=ROSE))
 
-        self._engine_thread = threading.Thread(target=_run, daemon=True,
-                                               name="EngineThread")
+        self._engine_thread = threading.Thread(
+            target=_run, daemon=True, name="EngineThread")
         self._engine_thread.start()
+
+    def _show_engine_error(self, msg: str) -> None:
+        """Show engine error in a small popup label on the Control tab."""
+        if hasattr(self, "_eng_err_lbl") and self._eng_err_lbl.winfo_exists():
+            self._eng_err_lbl.configure(text=f"⚠  {msg}")
+        else:
+            self._eng_err_lbl = ctk.CTkLabel(
+                self._tab_frames["control"],
+                text=f"⚠  Engine Error: {msg}",
+                font=("Consolas", 11), text_color=ROSE,
+                fg_color=BG_2, corner_radius=6)
+            self._eng_err_lbl.pack(fill="x", padx=24, pady=4)
 
     def _stop_engine(self) -> None:
         self._cmd("stop")
+        if self._engine_ref is not None:
+            try:
+                self._engine_ref.shutdown()
+            except Exception:
+                pass
+            self._engine_ref = None
         system_state.update(engine_running=False)
 
     def _start_camera(self) -> None:
