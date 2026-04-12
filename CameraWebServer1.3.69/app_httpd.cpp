@@ -563,7 +563,8 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
 #if CONFIG_LED_ILLUMINATOR_ENABLED
     isStreaming = true;
-    enable_led(true);
+    // SmartBin: do NOT auto-enable LED when stream starts.
+    // LED is controlled explicitly via /control?var=led_intensity&val=X
 #endif
 
     while (true)
@@ -788,7 +789,8 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
 #if CONFIG_LED_ILLUMINATOR_ENABLED
     isStreaming = false;
-    enable_led(false);
+    // SmartBin: do NOT auto-disable LED when stream ends.
+    // LED state is managed by the Pi engine exclusively.
 #endif
 
     return res;
@@ -892,8 +894,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
 #if CONFIG_LED_ILLUMINATOR_ENABLED
     else if (!strcmp(variable, "led_intensity")) {
         led_duty = val;
-        if (isStreaming)
-            enable_led(true);
+        enable_led(val > 0);  // Apply immediately regardless of streaming state
     }
 #endif
 

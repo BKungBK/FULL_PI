@@ -132,6 +132,8 @@ void setup() {
   setupLedFlash(LED_GPIO_NUM);
 #endif
 
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   WiFi.begin(ssid, password);
   WiFi.setSleep(false);
 
@@ -150,6 +152,25 @@ void setup() {
 }
 
 void loop() {
-  // Do nothing. Everything is done in another task by the web server
+  // ตรวจสอบ WiFi ทุก 10 วินาที และ reconnect อัตโนมัติ
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected! Reconnecting...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+
+    unsigned long startAttempt = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
+      delay(500);
+      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi reconnected!");
+      Serial.print("IP: ");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("\nReconnect failed, will retry...");
+    }
+  }
   delay(10000);
 }

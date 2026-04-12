@@ -865,6 +865,15 @@ class CameraStream(threading.Thread):
                 with self._lock:
                     self._frame = img
                     self._buffer.append(img)
+                # Push JPEG to shared_state for server MJPEG proxy
+                # (avoids server opening a competing stream to ESP32)
+                if system_state:
+                    try:
+                        _, jpeg = cv2.imencode(
+                            '.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        system_state.set_frame(jpeg.tobytes())
+                    except Exception:
+                        pass
             cap.release()
             if self._running:
                 time.sleep(Config.CAMERA_RECONNECT_DELAY)

@@ -84,6 +84,11 @@ class SharedState:
         self._cmd_q: "queue.Queue[dict]" = __import__("queue").Queue()
         self._sort_cbs: List[Callable] = []   # callbacks for WS broadcast
 
+        # ── Frame buffer for server MJPEG proxy ──────────────────────
+        self._frame_data: Optional[bytes] = None
+        self._frame_seq: int = 0
+        self._frame_lock_rw = threading.Lock()  # separate lock (high-freq writes)
+
     # ──────────────────────────────────────────────────────────────────
     # READ
     # ──────────────────────────────────────────────────────────────────
@@ -260,6 +265,22 @@ class SharedState:
             writer.writeheader()
             writer.writerows(history)
         return path
+
+
+    # ──────────────────────────────────────────────────────────────────
+    # FRAME BUFFER (CameraStream → Server MJPEG proxy)
+    # ──────────────────────────────────────────────────────────────────
+
+    def set_frame(self, jpeg_bytes: bytes) -> None:
+        """Store latest JPEG frame (called by CameraStream thread)."""
+        with self._frame_lock_rw:
+            self._frame_data = jpeg_bytes
+            self._frame_seq += 1
+
+    def get_frame_bytes(self) -> Tuple[Optional[bytes], int]:
+        """Return (jpeg_bytes, seq_number) for MJPEG proxy."""
+        with self._frame_lock_rw:
+            return self._frame_data, self._frame_seq
 
 
 # ── Module-level singleton ─────────────────────────────────────────────

@@ -261,53 +261,92 @@ def _get_esp_ip() -> str:
     return snap.get("esp32_ip") or "10.42.0.177"
 
 
+
+_MJPEG_BOUNDARY = b"123456789000000000000987654321"
+_MJPEG_CONTENT_TYPE = (
+    "multipart/x-mixed-replace;boundary=123456789000000000000987654321"
+)
+
+
 @app.get("/api/stream")
 async def mjpeg_stream() -> StreamingResponse:
     """Proxy the ESP32-CAM MJPEG stream to browser clients.
 
-    Forwards the real Content-Type header from the ESP32 so the
-    multipart boundary string matches exactly — the Espressif firmware
-    uses boundary='123456789000000000000987654321', not 'frame'.
+    Two modes to avoid multiple competing HTTP connections to the ESP32
+    (which causes stream drops):
+    - Engine running → reads JPEG frames from shared buffer.
+    - Engine stopped → proxies directly from ESP32 :81/stream.
     """
-    esp_ip  = _get_esp_ip()
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+    }
+
+    # If engine is running and has buffered frames, use shared buffer
+    if _engine_running():
+        frame_bytes, _ = system_state.get_frame_bytes()
+        if frame_bytes is not None:
+            logger.info("MJPEG proxy → shared buffer (engine active)")
+            return StreamingResponse(
+                _gen_from_buffer(),
+                media_type=_MJPEG_CONTENT_TYPE,
+                headers=headers,
+            )
+
+    # Fallback: proxy directly from ESP32 (only consumer on :81)
+    esp_ip = _get_esp_ip()
     src_url = f"http://{esp_ip}:81/stream"
-    logger.info("MJPEG proxy → %s", src_url)
-
-    # We need to peek at the response headers before streaming so we can
-    # forward the correct Content-Type (including the real boundary).
-    # Use a long connect timeout but no read timeout (stream is infinite).
-    _connect_timeout = httpx.Timeout(connect=8.0, read=None, write=5.0, pool=5.0)
-
-    async def _gen():
-        try:
-            async with httpx.AsyncClient(timeout=_connect_timeout) as client:
-                async with client.stream("GET", src_url) as resp:
-                    if resp.status_code != 200:
-                        logger.warning("ESP32 stream returned HTTP %d", resp.status_code)
-                        return
-                    # Stream raw bytes — boundary is already embedded in the data
-                    async for chunk in resp.aiter_bytes(8192):
-                        yield chunk
-        except httpx.ConnectError as exc:
-            logger.error("Cannot reach ESP32 at %s: %s", src_url, exc)
-        except httpx.TimeoutException as exc:
-            logger.error("Timeout connecting to ESP32 stream: %s", exc)
-        except Exception as exc:
-            logger.warning("MJPEG proxy error: %s", exc)
-
-    # Espressif CameraWebServer uses this boundary by default.
-    # If yours differs, check ESP32 serial output for the actual Content-Type.
-    content_type = "multipart/x-mixed-replace;boundary=123456789000000000000987654321"
+    logger.info("MJPEG proxy → %s (direct)", src_url)
 
     return StreamingResponse(
-        _gen(),
-        media_type=content_type,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Access-Control-Allow-Origin": "*",
-        },
+        _gen_from_esp32(src_url),
+        media_type=_MJPEG_CONTENT_TYPE,
+        headers=headers,
     )
+
+
+async def _gen_from_buffer():
+    """Generate MJPEG frames from the engine's shared frame buffer."""
+    last_seq = -1
+    miss_count = 0
+    while True:
+        frame_bytes, seq = system_state.get_frame_bytes()
+        if frame_bytes is not None and seq != last_seq:
+            last_seq = seq
+            miss_count = 0
+            yield (
+                b"\r\n--" + _MJPEG_BOUNDARY + b"\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame_bytes)).encode() + b"\r\n\r\n"
+                + frame_bytes + b"\r\n"
+            )
+        else:
+            miss_count += 1
+            if miss_count > 150:  # ~5s with no new frame → stop
+                logger.warning("MJPEG buffer: no new frames for 5s, stopping")
+                break
+        await asyncio.sleep(0.033)  # ~30 fps cap
+
+
+async def _gen_from_esp32(src_url: str):
+    """Proxy raw MJPEG bytes from ESP32-CAM stream."""
+    _connect_timeout = httpx.Timeout(connect=8.0, read=None, write=5.0, pool=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=_connect_timeout) as client:
+            async with client.stream("GET", src_url) as resp:
+                if resp.status_code != 200:
+                    logger.warning("ESP32 stream returned HTTP %d", resp.status_code)
+                    return
+                async for chunk in resp.aiter_bytes(8192):
+                    yield chunk
+    except httpx.ConnectError as exc:
+        logger.error("Cannot reach ESP32 at %s: %s", src_url, exc)
+    except httpx.TimeoutException as exc:
+        logger.error("Timeout connecting to ESP32 stream: %s", exc)
+    except Exception as exc:
+        logger.warning("MJPEG proxy error: %s", exc)
+
 
 
 @app.get("/api/stream/direct")
@@ -386,6 +425,15 @@ async def manual_sort(body: dict) -> JSONResponse:
 @app.post("/control/flash")
 async def set_flash(body: dict) -> JSONResponse:
     on = bool(body.get("on", False))
+    esp_ip = _get_esp_ip()
+    val = 200 if on else 0
+    url = f"http://{esp_ip}:80/control?var=led_intensity&val={val}"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.get(url)
+    except Exception as exc:
+        logger.warning("Flash command to ESP32 failed: %s", exc)
+    # Also notify engine thread for state tracking
     system_state.send_command({"action": "flash", "on": on})
     return JSONResponse({"success": True})
 

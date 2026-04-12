@@ -1074,6 +1074,19 @@ function startCam() {
   }, timeoutMs);
 
   img.src=_camStreamUrl();
+
+  // Fallback: poll naturalWidth for browsers where MJPEG doesn't fire onload
+  // (Firefox/Safari may not trigger onload for multipart streams)
+  let _camPoll = setInterval(() => {
+    if (img.naturalWidth > 0 && img.style.opacity !== '1') {
+      off.style.display = 'none';
+      img.style.opacity = '1';
+      clearTimeout(_camLoadTimer);
+      clearInterval(_camPoll);
+      _camDirectMode = false;
+    }
+  }, 500);
+  setTimeout(() => clearInterval(_camPoll), 15000); // give up after 15s
 }
 
 /* ═══════════════════════════════════════════════════════════
