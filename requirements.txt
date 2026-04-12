@@ -18,7 +18,10 @@
 
 # ── Computer Vision ───────────────────────────────────────────────
 opencv-python-headless>=4.8.0   # cv2  (headless = ไม่ต้องการ GUI libs)
-numpy>=1.24.0                   # array ops (used everywhere)
+# ⚠️  CRITICAL: tflite-runtime ถูก build กับ NumPy 1.x
+# NumPy 2.x ลบ numpy.core API → ImportError: numpy.core.multiarray failed to import
+# ต้อง pin ไว้ที่ <2 เสมอ!
+numpy<2                         # MUST be <2.0 — tflite-runtime ABI incompatible with NumPy 2.x
 
 # ── AI / Inference ────────────────────────────────────────────────
 ncnn                            # YOLO Stage-1 detector (NCNN Python binding)

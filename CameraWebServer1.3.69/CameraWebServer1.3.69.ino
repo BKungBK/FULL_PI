@@ -35,8 +35,8 @@
 // ===========================
 // Enter your WiFi credentials
 // ===========================
-const char* ssid = "vivo V21 5G";
-const char* password = "gemozabie77";
+const char* ssid = "PI";
+const char* password = "";
 
 void startCameraServer();
 void setupLedFlash(int pin);

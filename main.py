@@ -252,8 +252,12 @@ def load_tflite_model(model_path: str) -> tflite.Interpreter:
     delegates = []
     try:
         delegates.append(tflite.load_delegate("libtensorflow-lite-delegate-xnnpack.so"))
-    except (ValueError, OSError) as exc:
-        logging.warning("XNNPACK delegate unavailable, continuing without it: %s", exc)
+        logging.info("XNNPACK delegate loaded successfully.")
+    except Exception as exc:
+        # Not available on this platform — safe to skip.
+        # (Catches ValueError, OSError, and the Delegate.__del__ AttributeError
+        #  that some tflite_runtime versions raise on failed delegate cleanup.)
+        logging.debug("XNNPACK delegate unavailable, running on CPU threads: %s", exc)
 
     interpreter = tflite.Interpreter(
         model_path=model_path,
@@ -740,9 +744,17 @@ class HardwareController:
             time.sleep(delay)
 
     def idle_servos(self) -> None:
-        """Stop PWM signal to reduce servo heat."""
-        lgpio.tx_servo(self._h, Config.SERVO1_PIN, 0)
-        lgpio.tx_servo(self._h, Config.SERVO2_PIN, 0)
+        """Stop PWM signal to reduce servo heat and prevent jitter.
+
+        Uses tx_pwm(pin, 0, 0) to cancel the PWM waveform entirely.
+        tx_servo(pin, 0) is documented to stop servos but some lgpio
+        versions reject pulseWidth=0 as 'bad PWM micros'.
+        """
+        for pin in (Config.SERVO1_PIN, Config.SERVO2_PIN):
+            try:
+                lgpio.tx_pwm(self._h, pin, 0, 0)   # freq=0, duty=0 → stop
+            except Exception as exc:
+                logger.debug("idle_servos pin %d: %s", pin, exc)
 
     # ── ultrasonic ────────────────────────────────────────────────────
 
@@ -783,9 +795,12 @@ class HardwareController:
     def cleanup(self) -> None:
         try:
             self.idle_servos()
+        except Exception as exc:
+            logger.debug("idle_servos during cleanup: %s", exc)
+        try:
             lgpio.gpiochip_close(self._h)
             logger.info("GPIO released")
-        except OSError as exc:
+        except Exception as exc:
             logger.error("GPIO cleanup error: %s", exc)
 
 
@@ -856,10 +871,11 @@ class SmartBinEngine:
     """
 
     def __init__(self) -> None:
-        self._running = False
-        self._hw: Optional[HardwareController] = None
+        self._running  = False
+        self._hw:  Optional[HardwareController] = None
         self._cam: Optional[CameraStream] = None
         self._esp32_ip: str = ""
+        self._cv2_ok: bool = True   # flipped False on first headless cv2.error
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -928,10 +944,17 @@ class SmartBinEngine:
                     if cmd:
                         self._handle_command(cmd, hw)
 
-                # ── OpenCV preview (headless-friendly) ───────────────
-                if frame is not None:
-                    preview = self._draw_preview(frame, dist_main, full_bin, state)
-                    cv2.imshow("Smart Trash Bin", preview)
+                # ── OpenCV preview (headless-safe) ────────────────────
+                if self._cv2_ok and frame is not None:
+                    try:
+                        preview = self._draw_preview(frame, dist_main, full_bin, state)
+                        cv2.imshow("Smart Trash Bin", preview)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            break
+                    except cv2.error:
+                        # No display available (headless / no GTK) — disable preview
+                        self._cv2_ok = False
+                        logger.info("Headless mode: OpenCV preview disabled")
 
                 # ── state machine ─────────────────────────────────────
                 now          = time.monotonic()
