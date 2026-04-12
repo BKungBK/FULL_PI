@@ -1010,14 +1010,18 @@ class SmartBinEngine:
             name  = cmd.get("name", "")
             angle = int(cmd.get("angle", Config.CENTER_ANGLE))
             if name == "capture":
-                hw.move_servo(Config.SERVO1_PIN, angle)
+                # Use smooth_move for slider — avoids quantum-jump jerk
+                hw.smooth_move(Config.SERVO1_PIN, angle, steps=12, delay=0.015)
             elif name == "sort":
-                hw.move_servo(Config.SERVO2_PIN, angle)
+                # smooth_move gives the same feel as manual_sort buttons
+                hw.smooth_move(Config.SERVO2_PIN, angle, steps=12, delay=0.015)
             elif name == "all":
-                hw.move_servo(Config.SERVO1_PIN, angle)
-                hw.move_servo(Config.SERVO2_PIN, angle)
-                time.sleep(0.3)
-                hw.idle_servos()
+                hw.smooth_move(Config.SERVO1_PIN, angle, steps=12, delay=0.015)
+                hw.smooth_move(Config.SERVO2_PIN, angle, steps=12, delay=0.015)
+                # Only idle after 'all' (reset to home)
+                if angle == Config.CENTER_ANGLE:
+                    time.sleep(0.2)
+                    hw.idle_servos()
         elif action == "flash":
             self._send_flash(on=bool(cmd.get("on", False)))
         elif action == "mode":
