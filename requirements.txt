@@ -1,0 +1,44 @@
+# ================================================================
+# SmartBin V2 — Python Requirements
+# Raspberry Pi 5  |  Python 3.11+
+# ================================================================
+#
+# Install all at once:
+#   pip install -r requirements.txt
+#
+# ── IMPORTANT: packages NOT available via pip (install separately) ─
+#   ncnn              → pip install ncnn
+#   tflite-runtime    → pip install tflite-runtime
+#                       (หรือ pip install tflite-runtime --index-url
+#                        https://google-coral.github.io/py-repo/)
+#   lgpio             → pip install lgpio   (Pi 5 GPIO)
+#   opencv for Pi     → pip install opencv-python-headless
+#                        (ถ้า desktop มี display ใช้ opencv-python)
+# ================================================================
+
+# ── Computer Vision ───────────────────────────────────────────────
+opencv-python-headless>=4.8.0   # cv2  (headless = ไม่ต้องการ GUI libs)
+numpy>=1.24.0                   # array ops (used everywhere)
+
+# ── AI / Inference ────────────────────────────────────────────────
+ncnn                            # YOLO Stage-1 detector (NCNN Python binding)
+tflite-runtime>=2.13.0          # EfficientNet Stage-2 classifier  ← Pi build
+
+# ── Hardware (Raspberry Pi 5 only) ────────────────────────────────
+lgpio>=0.2.2                    # GPIO on Pi 5 (replaces RPi.GPIO)
+requests>=2.31.0                # ESP32-CAM HTTP control + flash
+
+# ── Desktop UI ────────────────────────────────────────────────────
+customtkinter>=5.2.0            # Modern Tkinter UI framework
+Pillow>=10.0.0                  # PIL — image decode for camera feed
+matplotlib>=3.7.0               # 4-chart evaluation graphs (TkAgg backend)
+
+# ── Web API Server (for ui.html browser access) ───────────────────
+fastapi>=0.111.0                # REST + WebSocket API
+uvicorn[standard]>=0.29.0       # ASGI server (runs FastAPI)
+httpx>=0.27.0                   # async MJPEG proxy inside FastAPI
+pydantic>=2.0.0                 # request body models (FastAPI dep)
+
+# ── stdlib only (no install needed) ───────────────────────────────
+# asyncio, collections, csv, dataclasses, enum, logging, os,
+# pathlib, queue, signal, socket, sys, threading, time, typing
