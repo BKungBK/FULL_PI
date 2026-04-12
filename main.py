@@ -251,13 +251,14 @@ def load_tflite_model(model_path: str) -> tflite.Interpreter:
 
     delegates = []
     try:
-        delegates.append(tflite.load_delegate("libtensorflow-lite-delegate-xnnpack.so"))
-        logging.info("XNNPACK delegate loaded successfully.")
-    except Exception as exc:
-        # Not available on this platform — safe to skip.
-        # (Catches ValueError, OSError, and the Delegate.__del__ AttributeError
-        #  that some tflite_runtime versions raise on failed delegate cleanup.)
-        logging.debug("XNNPACK delegate unavailable, running on CPU threads: %s", exc)
+        _d = tflite.load_delegate("libtensorflow-lite-delegate-xnnpack.so")
+        delegates.append(_d)
+        logging.info("XNNPACK delegate loaded.")
+    except Exception:
+        # XNNPACK .so not present on this platform (Pi 5 headless) — run on CPU.
+        # Note: tflite_runtime may print "Exception ignored in Delegate.__del__"
+        # above — this is a known cosmetic bug in some tflite builds; it is safe.
+        pass
 
     interpreter = tflite.Interpreter(
         model_path=model_path,
@@ -978,8 +979,6 @@ class SmartBinEngine:
                         time.sleep(Config.COOLDOWN_SECONDS)
                         state = DetectionState.IDLE
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -1110,11 +1109,13 @@ class SmartBinEngine:
         Labels (from labels.txt): AluCan, Glass, HDPEM, PET
         """
         ll = label.lower()
+        if "reject" in ll:
+            return Config.CENTER_ANGLE   # 92° — stay home, drop in default bin
         if "pet" in ll or "hdpe" in ll or "plastic" in ll:
-            return Config.PLASTIC_ANGLE   # 112°
+            return Config.PLASTIC_ANGLE  # 112°
         if "glass" in ll:
-            return Config.GLASS_ANGLE     # 157°
-        return Config.METAL_ANGLE         # 67°  (AluCan / default)
+            return Config.GLASS_ANGLE    # 157°
+        return Config.METAL_ANGLE        # 67° (metal / AluCan / default)
 
     def _send_flash(self, on: bool) -> None:
         url = Config.flash_url(self._esp32_ip, on)
@@ -1175,7 +1176,11 @@ class SmartBinEngine:
             self._cam.stop()
         if self._hw:
             self._hw.cleanup()
-        cv2.destroyAllWindows()
+        if self._cv2_ok:
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                pass
         logger.info("System shut down cleanly")
 
 

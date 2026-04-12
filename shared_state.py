@@ -173,10 +173,14 @@ class SharedState:
             s.sort_counts[label] = s.sort_counts.get(label, 0) + 1
             s.total_sorted      += 1
 
-            for lst in (s.sort_times_ms, s.inference_times_ms):
-                lst.append(inference_ms)
-                if len(lst) > self.MAX_TIMES:
-                    lst.pop(0)
+            s.inference_times_ms.append(inference_ms)
+            if len(s.inference_times_ms) > self.MAX_TIMES:
+                s.inference_times_ms.pop(0)
+
+            sort_wall_ms = 0.0   # wall time filled in by engine if needed
+            s.sort_times_ms.append(sort_wall_ms)
+            if len(s.sort_times_ms) > self.MAX_TIMES:
+                s.sort_times_ms.pop(0)
 
             event: dict = {
                 "time":       s.last_sort_time,
