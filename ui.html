@@ -1010,17 +1010,42 @@ function sendRoi() {
    CAMERA
 ═══════════════════════════════════════════════════════════ */
 let camRetry=null;
+let _camLoadTimer=null;
 function startCam() {
   const img=document.getElementById('cam-img');
   const off=document.getElementById('cam-off');
   clearTimeout(camRetry);
+  clearTimeout(_camLoadTimer);
+
+  // Reset state — show offline placeholder while loading
+  img.style.opacity='0';
+  off.style.display='flex';
+  off.innerHTML='<div class="ico" style="animation:sbpulse .8s infinite alternate">◼</div><div>Connecting…</div>';
+
+  img.onload=()=>{
+    off.style.display='none';
+    img.style.opacity='1';
+    clearTimeout(_camLoadTimer);
+  };
   img.onerror=()=>{
-    img.style.opacity='0'; off.style.display='flex';
+    img.style.opacity='0';
+    off.style.display='flex';
+    off.innerHTML='<div class="ico">◼</div><div>No stream</div>';
     camRetry=setTimeout(startCam,4000);
   };
-  off.style.display='none';
+
+  // For MJPEG streams: browser fires onload on first frame.
+  // If no frame arrives within 6s, treat as offline.
+  _camLoadTimer=setTimeout(()=>{
+    if(img.style.opacity!=='1'){
+      img.src='';
+      off.style.display='flex';
+      off.innerHTML='<div class="ico">◼</div><div>No stream</div>';
+      camRetry=setTimeout(startCam,4000);
+    }
+  },6000);
+
   img.src=`${HOST}/api/stream?t=${Date.now()}`;
-  img.style.opacity='1';
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1200,9 +1225,12 @@ function toast(msg,ok=true){
 /* ═══════════════════════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════════════════════ */
+// startCam() is called automatically from ws.onopen.
+// Also attempt immediately in case the server is already up (page reload).
 connect();
-startCam();
-api('GET','/api/full-snapshot').then(r=>{ if(r.ok){ snap=r.data; renderSnap(); } });
+api('GET','/api/full-snapshot').then(r=>{ if(r.ok){ snap=r.data; renderSnap(); startCam(); } });
+// Fallback: if full-snapshot never resolves, still try to show the stream
+setTimeout(()=>{ if(!document.getElementById('cam-img').src) startCam(); },1500);
 </script>
 </body>
 </html>
