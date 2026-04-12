@@ -62,6 +62,13 @@ CLASS_COLORS = {
     "glass":   "#a78bfa",
     "reject":  "#fb7185",
 }
+# Dark muted backgrounds per class (Tkinter-safe 6-digit hex — no alpha)
+CLASS_BG = {
+    "metal":   "#0f2035",   # dark navy blue
+    "plastic": "#2a1f06",   # dark amber
+    "glass":   "#1a1530",   # dark violet
+    "reject":  "#2d1520",   # dark rose
+}
 STATE_COLORS = {
     "idle":         EMERALD,
     "hand_present": SKY,
@@ -441,7 +448,7 @@ class SmartBinApp(ctk.CTk):
         ctk.CTkLabel(row, text=event.get("time", ""), font=FONT_MONO,
                      text_color=TEXT_DIM, width=65).pack(side="left")
         ctk.CTkLabel(row, text=f"  {cls.upper()}  ", font=("Consolas", 10, "bold"),
-                     fg_color=f"{color}22", text_color=color,
+                     fg_color=CLASS_BG.get(cls, BG_2), text_color=color,
                      corner_radius=4).pack(side="left", padx=6)
         ctk.CTkLabel(row, text=f"{event.get('confidence', 0):.2f}",
                      font=FONT_MONO, text_color=TEXT_DIM).pack(side="left")
@@ -685,7 +692,7 @@ class SmartBinApp(ctk.CTk):
         for cls in CLASSES:
             ctk.CTkButton(cf, text=cls.capitalize(), width=90, height=32,
                           font=("Segoe UI", 11),
-                          fg_color=f"{CLASS_COLORS[cls]}22",
+                          fg_color=CLASS_BG[cls],
                           text_color=CLASS_COLORS[cls],
                           border_color=CLASS_COLORS[cls], border_width=1,
                           hover_color=BG_2,
