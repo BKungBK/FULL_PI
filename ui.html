@@ -1,0 +1,2650 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartBin V2 — Intelligent Waste Classification</title>
+    <meta name="description" content="SmartBin V2 — ระบบคัดแยกขยะอัจฉริยะด้วย AI จำแนก 4 ประเภทภายใน 1.5 วินาที">
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        /* ============================================================
+           DESIGN SYSTEM — Eco-Tech Lab
+           A sophisticated IoT dashboard for waste classification.
+           Dark substrate with emerald energy + warm amber data accents.
+           ============================================================ */
+        *,
+        *::before,
+        *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* Substrate */
+            --bg-0: #0b0f0e;
+            --bg-1: #111916;
+            --bg-2: #161f1b;
+            --bg-3: #1c2823;
+            --bg-glass: rgba(18, 30, 25, 0.7);
+
+            /* Accent spectrum */
+            --emerald: #34d399;
+            --emerald-dim: #059669;
+            --emerald-glow: rgba(52, 211, 153, 0.15);
+            --amber: #fbbf24;
+            --amber-dim: #d97706;
+            --sky: #38bdf8;
+            --rose: #fb7185;
+            --violet: #a78bfa;
+
+            /* Waste class colors — distinctive and accessible */
+            --c-metal: #60a5fa;
+            --c-plastic: #fbbf24;
+            --c-glass: #a78bfa;
+            --c-reject: #fb7185;
+
+            /* Text */
+            --text-0: #f0fdf4;
+            --text-1: #bbf7d0;
+            --text-2: #6ee7b7;
+            --text-3: #4ade80;
+            --text-dim: #3f6f5c;
+            --text-muted: #2d4a3e;
+
+            /* Borders */
+            --border: rgba(52, 211, 153, 0.08);
+            --border-hover: rgba(52, 211, 153, 0.18);
+            --border-active: rgba(52, 211, 153, 0.35);
+
+            /* Radii */
+            --r-sm: 6px;
+            --r-md: 10px;
+            --r-lg: 16px;
+            --r-xl: 24px;
+            --r-full: 9999px;
+
+            /* Shadows */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+            --shadow-glow: 0 0 30px rgba(52, 211, 153, 0.07);
+
+            /* Motion */
+            --ease: cubic-bezier(0.16, 1, 0.3, 1);
+            --t-fast: 0.2s;
+            --t-med: 0.4s;
+            --t-slow: 0.7s;
+
+            /* Fonts */
+            --ff-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+            --ff-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+            /* Sidebar width */
+            --sidebar-w: 260px;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: var(--ff-sans);
+            background: var(--bg-0);
+            color: var(--text-0);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            overflow-x: hidden;
+        }
+
+        /* Subtle grain texture overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* ============================================================
+           LAYOUT
+           ============================================================ */
+        .app {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* ============================================================
+           SIDEBAR
+           ============================================================ */
+        .sidebar {
+            width: var(--sidebar-w);
+            background: var(--bg-1);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 28px 14px;
+            position: fixed;
+            height: 100vh;
+            z-index: 100;
+            backdrop-filter: blur(20px);
+        }
+
+        .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 0 14px;
+            margin-bottom: 36px;
+        }
+
+        .brand-glyph {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--r-md);
+            background: linear-gradient(135deg, var(--emerald), var(--emerald-dim));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--ff-mono);
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--bg-0);
+            box-shadow: 0 0 20px rgba(52, 211, 153, 0.25);
+            transition: transform var(--t-med) var(--ease);
+        }
+
+        .brand-glyph:hover {
+            transform: rotate(-6deg) scale(1.08);
+        }
+
+        .brand-meta {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .brand-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-0);
+            letter-spacing: -0.3px;
+        }
+
+        .brand-version {
+            font-family: var(--ff-mono);
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .nav-section {
+            margin-bottom: 8px;
+        }
+
+        .nav-label {
+            padding: 8px 14px 6px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            margin: 2px 0;
+            border-radius: var(--r-md);
+            cursor: pointer;
+            transition: all var(--t-fast) var(--ease);
+            color: var(--text-2);
+            font-size: 13.5px;
+            font-weight: 500;
+            position: relative;
+            border: 1px solid transparent;
+        }
+
+        .nav-item:hover {
+            background: var(--emerald-glow);
+            color: var(--text-0);
+            border-color: var(--border-hover);
+        }
+
+        .nav-item.active {
+            background: var(--emerald-glow);
+            color: var(--emerald);
+            border-color: var(--border-active);
+        }
+
+        .nav-item.active::before {
+            content: '';
+            position: absolute;
+            left: -14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 20px;
+            background: var(--emerald);
+            border-radius: 0 var(--r-full) var(--r-full) 0;
+        }
+
+        .nav-item svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            opacity: 0.7;
+        }
+
+        .nav-item.active svg {
+            opacity: 1;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 16px 14px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .sys-uptime {
+            font-family: var(--ff-mono);
+            font-size: 10px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .sys-uptime .pulse-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--emerald);
+            animation: glow-pulse 2s ease infinite;
+        }
+
+        @keyframes glow-pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 4px var(--emerald);
+                opacity: 1;
+            }
+
+            50% {
+                box-shadow: 0 0 12px var(--emerald);
+                opacity: 0.6;
+            }
+        }
+
+        /* ============================================================
+           MAIN CONTENT
+           ============================================================ */
+        .main {
+            flex: 1;
+            margin-left: var(--sidebar-w);
+            padding: 32px 40px 60px;
+            min-height: 100vh;
+            max-width: 1440px;
+        }
+
+        .page {
+            display: none;
+            opacity: 0;
+        }
+
+        .page.active {
+            display: block;
+            animation: page-enter var(--t-slow) var(--ease) forwards;
+        }
+
+        @keyframes page-enter {
+            from {
+                opacity: 0;
+                transform: translateY(16px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* ============================================================
+           HEADER
+           ============================================================ */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 32px;
+            gap: 16px;
+        }
+
+        .page-header-left h1 {
+            font-size: 26px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            color: var(--text-0);
+        }
+
+        .page-header-left .page-subtitle {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        .header-pills {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 14px;
+            border-radius: var(--r-full);
+            font-size: 11.5px;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            background: var(--bg-2);
+            color: var(--text-2);
+            transition: all var(--t-fast);
+        }
+
+        .pill .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            transition: all var(--t-fast);
+        }
+
+        .pill.online .dot {
+            background: var(--emerald);
+            box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+        }
+
+        .pill.offline .dot {
+            background: var(--rose);
+            box-shadow: 0 0 8px rgba(251, 113, 133, 0.5);
+        }
+
+        .pill.warning .dot {
+            background: var(--amber);
+            box-shadow: 0 0 8px rgba(251, 191, 36, 0.5);
+        }
+
+        .mode-chip {
+            padding: 5px 16px;
+            border-radius: var(--r-full);
+            font-family: var(--ff-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            border: 1px solid var(--border);
+            transition: all var(--t-med) var(--ease);
+        }
+
+        .mode-chip.auto {
+            background: rgba(52, 211, 153, 0.12);
+            color: var(--emerald);
+            border-color: rgba(52, 211, 153, 0.3);
+        }
+
+        .mode-chip.manual {
+            background: rgba(251, 191, 36, 0.12);
+            color: var(--amber);
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+
+        /* ============================================================
+           CARDS
+           ============================================================ */
+        .card {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: var(--r-lg);
+            padding: 24px;
+            margin-bottom: 20px;
+            transition: border-color var(--t-fast), box-shadow var(--t-med);
+            position: relative;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-2);
+            letter-spacing: 0.3px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title .icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.5;
+        }
+
+        .card-badge {
+            font-family: var(--ff-mono);
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: var(--r-full);
+            background: var(--bg-3);
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+        }
+
+        /* ============================================================
+           GRIDS
+           ============================================================ */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+        }
+
+        @media (max-width: 1200px) {
+            .grid-4 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 72px;
+                padding: 20px 8px;
+            }
+
+            .sidebar .brand-meta,
+            .sidebar .nav-label,
+            .sidebar .nav-item span,
+            .sidebar-footer {
+                display: none;
+            }
+
+            .sidebar .brand-glyph {
+                margin: 0 auto;
+            }
+
+            .sidebar .nav-item {
+                justify-content: center;
+                padding: 10px;
+            }
+
+            .sidebar .nav-item::before {
+                left: -8px !important;
+            }
+
+            .main {
+                margin-left: 72px;
+                padding: 20px 16px;
+            }
+
+            .grid-4 {
+                grid-template-columns: 1fr;
+            }
+
+            .page-header {
+                flex-direction: column;
+            }
+        }
+
+        /* ============================================================
+           VIDEO STREAM
+           ============================================================ */
+        .stream-box {
+            position: relative;
+            background: var(--bg-0);
+            border-radius: var(--r-md);
+            overflow: hidden;
+            aspect-ratio: 4/3;
+            border: 1px solid var(--border);
+        }
+
+        .stream-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .stream-overlay {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            gap: 8px;
+            z-index: 5;
+        }
+
+        .live-tag {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 4px 12px;
+            border-radius: var(--r-full);
+            font-family: var(--ff-mono);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #fff;
+        }
+
+        .live-tag .rec-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--rose);
+            animation: glow-pulse 2s infinite;
+        }
+
+        .stream-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            gap: 12px;
+            font-size: 13px;
+        }
+
+        .stream-placeholder svg {
+            width: 48px;
+            height: 48px;
+            opacity: 0.2;
+        }
+
+        .roi-overlay-canvas {
+            position: absolute;
+            inset: 0;
+            pointer-events: auto;
+            cursor: crosshair;
+            z-index: 10;
+        }
+
+        /* ============================================================
+           STAT CARDS
+           ============================================================ */
+        .stat-tile {
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            transition: all var(--t-fast) var(--ease);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-tile:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        /* Subtle top accent bar */
+        .stat-tile::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+        }
+
+        .stat-tile.metal::before {
+            background: var(--c-metal);
+        }
+
+        .stat-tile.plastic::before {
+            background: var(--c-plastic);
+        }
+
+        .stat-tile.glass::before {
+            background: var(--c-glass);
+        }
+
+        .stat-tile.reject::before {
+            background: var(--c-reject);
+        }
+
+        .stat-tile .stat-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .stat-tile .stat-num {
+            font-family: var(--ff-mono);
+            font-size: 30px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            line-height: 1.1;
+        }
+
+        .stat-tile.metal .stat-num {
+            color: var(--c-metal);
+        }
+
+        .stat-tile.plastic .stat-num {
+            color: var(--c-plastic);
+        }
+
+        .stat-tile.glass .stat-num {
+            color: var(--c-glass);
+        }
+
+        .stat-tile.reject .stat-num {
+            color: var(--c-reject);
+        }
+
+        .stat-tile .stat-bar {
+            height: 3px;
+            background: var(--bg-0);
+            border-radius: var(--r-full);
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .stat-tile .stat-bar-fill {
+            height: 100%;
+            border-radius: var(--r-full);
+            transition: width 0.8s var(--ease);
+        }
+
+        /* ============================================================
+           ACTIVITY LOG
+           ============================================================ */
+        .log-scroll {
+            max-height: 320px;
+            overflow-y: auto;
+            padding-right: 6px;
+        }
+
+        .log-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            animation: row-in var(--t-med) var(--ease);
+        }
+
+        @keyframes row-in {
+            from {
+                opacity: 0;
+                transform: translateX(-12px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .log-row:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            font-family: var(--ff-mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            min-width: 65px;
+        }
+
+        .log-tag {
+            padding: 3px 10px;
+            border-radius: var(--r-sm);
+            font-family: var(--ff-mono);
+            font-size: 10.5px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .log-tag.metal {
+            background: rgba(96, 165, 250, 0.12);
+            color: var(--c-metal);
+        }
+
+        .log-tag.plastic {
+            background: rgba(251, 191, 36, 0.12);
+            color: var(--c-plastic);
+        }
+
+        .log-tag.glass {
+            background: rgba(167, 139, 250, 0.12);
+            color: var(--c-glass);
+        }
+
+        .log-tag.reject {
+            background: rgba(251, 113, 133, 0.12);
+            color: var(--c-reject);
+        }
+
+        .log-conf {
+            margin-left: auto;
+            font-family: var(--ff-mono);
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .log-empty {
+            text-align: center;
+            padding: 48px 20px;
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+
+        .log-empty svg {
+            width: 32px;
+            height: 32px;
+            opacity: 0.2;
+            margin-bottom: 12px;
+            display: block;
+            margin-inline: auto;
+        }
+
+        /* ============================================================
+           CONFIRM BAR
+           ============================================================ */
+        .confirm-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: var(--bg-3);
+            border: 1px solid var(--border-hover);
+            border-radius: var(--r-md);
+            margin-bottom: 14px;
+            font-size: 12px;
+        }
+
+        .confirm-strip .confirm-label {
+            color: var(--text-2);
+            margin-right: auto;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .confirm-strip .confirm-label strong {
+            font-family: var(--ff-mono);
+            color: var(--text-0);
+        }
+
+        /* ============================================================
+           CONTROLS
+           ============================================================ */
+        .section-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--text-0);
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .control-key {
+            min-width: 100px;
+            font-size: 12px;
+            color: var(--text-dim);
+            font-weight: 500;
+        }
+
+        /* Toggle */
+        .toggle-track {
+            position: relative;
+            width: fit-content;
+            background: var(--bg-2);
+            border-radius: var(--r-full);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            padding: 3px;
+            border: 1px solid var(--border);
+            transition: all var(--t-med) var(--ease);
+        }
+
+        .toggle-thumb {
+            position: absolute;
+            height: 28px;
+            width: 76px;
+            background: var(--emerald);
+            border-radius: var(--r-full);
+            transition: transform var(--t-med) var(--ease), background var(--t-med);
+            z-index: 0;
+        }
+
+        .toggle-track.manual .toggle-thumb {
+            transform: translateX(76px);
+            background: var(--amber);
+        }
+
+        .toggle-options {
+            display: flex;
+            position: relative;
+            z-index: 1;
+        }
+
+        .toggle-options span {
+            width: 76px;
+            text-align: center;
+            font-family: var(--ff-mono);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 0;
+            transition: color var(--t-fast);
+            color: var(--text-dim);
+            letter-spacing: 0.5px;
+        }
+
+        .toggle-track:not(.manual) .toggle-options span:first-child {
+            color: var(--bg-0);
+        }
+
+        .toggle-track.manual .toggle-options span:last-child {
+            color: var(--bg-0);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 18px;
+            border: 1px solid transparent;
+            border-radius: var(--r-sm);
+            font-family: var(--ff-sans);
+            font-size: 12.5px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--t-fast) var(--ease);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            line-height: 1;
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn-accent {
+            background: var(--emerald);
+            color: var(--bg-0);
+        }
+
+        .btn-accent:hover:not(:disabled) {
+            background: #4ade80;
+            box-shadow: 0 0 16px rgba(52, 211, 153, 0.25);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-2);
+            border-color: var(--border);
+        }
+
+        .btn-outline:hover:not(:disabled) {
+            background: var(--emerald-glow);
+            border-color: var(--border-hover);
+            color: var(--text-0);
+        }
+
+        .btn-danger-outline {
+            background: transparent;
+            color: var(--rose);
+            border-color: rgba(251, 113, 133, 0.2);
+        }
+
+        .btn-danger-outline:hover:not(:disabled) {
+            background: rgba(251, 113, 133, 0.08);
+            border-color: rgba(251, 113, 133, 0.35);
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-waste {
+            flex: 1;
+            min-width: 85px;
+            border-color: var(--border);
+            color: var(--text-dim);
+            font-family: var(--ff-mono);
+            font-size: 11px;
+            letter-spacing: 0.3px;
+        }
+
+        .btn-waste.metal:hover {
+            border-color: var(--c-metal);
+            color: var(--c-metal);
+            background: rgba(96, 165, 250, 0.06);
+        }
+
+        .btn-waste.plastic:hover {
+            border-color: var(--c-plastic);
+            color: var(--c-plastic);
+            background: rgba(251, 191, 36, 0.06);
+        }
+
+        .btn-waste.glass:hover {
+            border-color: var(--c-glass);
+            color: var(--c-glass);
+            background: rgba(167, 139, 250, 0.06);
+        }
+
+        .btn-waste.reject:hover {
+            border-color: var(--c-reject);
+            color: var(--c-reject);
+            background: rgba(251, 113, 133, 0.06);
+        }
+
+        /* Sliders */
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex: 1;
+        }
+
+        .range-input {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 3px;
+            background: var(--bg-3);
+            border-radius: var(--r-full);
+            outline: none;
+        }
+
+        .range-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--emerald);
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform var(--t-fast), box-shadow var(--t-fast);
+            box-shadow: 0 0 6px rgba(52, 211, 153, 0.3);
+        }
+
+        .range-input::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 14px rgba(52, 211, 153, 0.5);
+        }
+
+        .range-val {
+            font-family: var(--ff-mono);
+            font-size: 12px;
+            color: var(--text-2);
+            min-width: 32px;
+            text-align: right;
+        }
+
+        /* Inputs */
+        .field-group {
+            margin-bottom: 14px;
+        }
+
+        .field-label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 12px;
+            color: var(--text-dim);
+            font-weight: 500;
+        }
+
+        .field-input {
+            width: 100%;
+            padding: 9px 14px;
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            color: var(--text-0);
+            font-family: var(--ff-sans);
+            font-size: 13px;
+            transition: border-color var(--t-fast);
+        }
+
+        .field-input:focus {
+            outline: none;
+            border-color: var(--emerald-dim);
+        }
+
+        .field-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        select.field-input {
+            cursor: pointer;
+        }
+
+        select.field-input option {
+            background: var(--bg-1);
+            color: var(--text-0);
+        }
+
+        /* ============================================================
+           BIN LEVELS
+           ============================================================ */
+        .bin-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+        }
+
+        .bin-cell {
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            padding: 20px 14px;
+            text-align: center;
+            background: var(--bg-0);
+            transition: all var(--t-fast);
+        }
+
+        .bin-cell:hover {
+            border-color: var(--border-hover);
+        }
+
+        .bin-cell .bin-name {
+            font-family: var(--ff-mono);
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+
+        .bin-pct {
+            font-family: var(--ff-mono);
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 18px;
+            letter-spacing: -0.5px;
+            transition: color var(--t-fast);
+        }
+
+        .bin-pct.green {
+            color: var(--emerald);
+        }
+
+        .bin-pct.yellow {
+            color: var(--amber);
+        }
+
+        .bin-pct.red {
+            color: var(--rose);
+        }
+
+        /* ============================================================
+           DISABLED OVERLAY
+           ============================================================ */
+        .disabled-zone {
+            opacity: 0.35;
+            pointer-events: none;
+            filter: grayscale(0.8);
+            transition: all var(--t-med);
+        }
+
+        .auto-notice {
+            font-size: 12px;
+            color: var(--text-dim);
+            padding: 12px 16px;
+            background: var(--bg-2);
+            border-radius: var(--r-sm);
+            margin-bottom: 20px;
+            text-align: center;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .auto-notice svg {
+            width: 14px;
+            height: 14px;
+            opacity: 0.4;
+        }
+
+        /* ============================================================
+           ROI CONTROLS
+           ============================================================ */
+        .roi-panel {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .roi-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .roi-top-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-2);
+        }
+
+        .roi-tip {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-bottom: 14px;
+        }
+
+        .roi-sliders {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .roi-slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .roi-slider-row label {
+            font-size: 11px;
+            color: var(--text-dim);
+            min-width: 58px;
+            font-weight: 500;
+        }
+
+        .roi-slider-row input[type="range"] {
+            flex: 1;
+        }
+
+        .roi-val {
+            font-family: var(--ff-mono);
+            font-size: 11px;
+            color: var(--text-2);
+            min-width: 30px;
+            text-align: right;
+        }
+
+        .roi-btns {
+            display: flex;
+            gap: 8px;
+        }
+
+        .roi-btns .btn {
+            flex: 1;
+        }
+
+        /* ============================================================
+           WEBSOCKET STATUS
+           ============================================================ */
+        .ws-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+
+        .ws-bar .ws-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--emerald);
+        }
+
+        .ws-bar.disconnected .ws-dot {
+            background: var(--rose);
+        }
+
+        .ws-bar.reconnecting .ws-dot {
+            background: var(--amber);
+        }
+
+        /* ============================================================
+           PERFORMANCE PAGE — Eco-Tech Data Tables
+           ============================================================ */
+        .kpi-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            margin-bottom: 28px;
+        }
+
+        .kpi-card {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            padding: 20px;
+            text-align: center;
+            transition: all var(--t-fast);
+        }
+
+        .kpi-card:hover {
+            border-color: var(--border-hover);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .kpi-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .kpi-value {
+            font-family: var(--ff-mono);
+            font-size: 34px;
+            font-weight: 700;
+            color: var(--text-0);
+            letter-spacing: -1px;
+            line-height: 1;
+        }
+
+        .kpi-unit {
+            font-size: 14px;
+            font-weight: 400;
+            color: var(--text-dim);
+        }
+
+        /* Data Table */
+        .data-table-wrap {
+            overflow-x: auto;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12.5px;
+        }
+
+        .data-table th {
+            text-align: left;
+            padding: 10px 16px;
+            font-family: var(--ff-mono);
+            font-weight: 600;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-dim);
+            border-bottom: 2px solid var(--border);
+            white-space: nowrap;
+        }
+
+        .data-table td {
+            padding: 11px 16px;
+            border-bottom: 1px solid var(--border);
+            font-family: var(--ff-mono);
+            font-size: 12.5px;
+            color: var(--text-1);
+            transition: background var(--t-fast);
+        }
+
+        .data-table tr:hover td {
+            background: var(--bg-2);
+        }
+
+        .data-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .data-table .row-label {
+            font-family: var(--ff-sans);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .class-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .data-table .overall-row td {
+            font-weight: 700;
+            border-top: 2px solid var(--border);
+            background: rgba(52, 211, 153, 0.03);
+        }
+
+        .result-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 10px;
+            border-radius: var(--r-sm);
+            font-family: var(--ff-sans);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .result-badge.pass {
+            background: rgba(52, 211, 153, 0.12);
+            color: var(--emerald);
+        }
+
+        .result-badge.fail {
+            background: rgba(251, 113, 133, 0.12);
+            color: var(--rose);
+        }
+
+        .result-badge.warn {
+            background: rgba(251, 191, 36, 0.12);
+            color: var(--amber);
+        }
+
+        .result-badge.nodata {
+            background: var(--bg-3);
+            color: var(--text-muted);
+        }
+
+        /* Confusion Matrix */
+        .cm-wrap {
+            display: inline-block;
+            margin: 0 auto;
+        }
+
+        .cm-table {
+            border-collapse: collapse;
+            font-family: var(--ff-mono);
+            font-size: 12px;
+        }
+
+        .cm-table th,
+        .cm-table td {
+            padding: 10px 18px;
+            text-align: center;
+            border: 1px solid var(--border);
+            min-width: 72px;
+        }
+
+        .cm-table th {
+            background: var(--bg-3);
+            font-weight: 600;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+        }
+
+        .cm-table .cm-corner {
+            background: transparent;
+            border: none;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .cm-table .cm-diagonal {
+            font-weight: 700;
+        }
+
+        .cm-table .cm-val {
+            font-weight: 500;
+        }
+
+        .confusion-alert {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 18px;
+            border: 1px solid rgba(251, 191, 36, 0.15);
+            border-left: 3px solid var(--amber);
+            border-radius: var(--r-md);
+            margin-top: 18px;
+            background: rgba(251, 191, 36, 0.03);
+            font-size: 12.5px;
+            color: var(--text-2);
+        }
+
+        .confusion-alert strong {
+            color: var(--text-0);
+        }
+
+        /* ============================================================
+           TOAST
+           ============================================================ */
+        .toast-tray {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 5000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .toast {
+            padding: 11px 18px;
+            border-radius: var(--r-sm);
+            font-size: 12.5px;
+            font-weight: 500;
+            animation: toast-in var(--t-med) var(--ease);
+            min-width: 260px;
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+        }
+
+        @keyframes toast-in {
+            from {
+                opacity: 0;
+                transform: translateY(16px) scale(0.96);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .toast.success {
+            background: var(--bg-1);
+            color: var(--text-0);
+            border-left: 3px solid var(--emerald);
+        }
+
+        .toast.error {
+            background: var(--bg-1);
+            color: var(--text-0);
+            border-left: 3px solid var(--rose);
+        }
+
+        .toast.warning {
+            background: var(--bg-1);
+            color: var(--text-0);
+            border-left: 3px solid var(--amber);
+        }
+
+        /* ============================================================
+           SCROLLBAR
+           ============================================================ */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-3);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--emerald-dim);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <!-- ============ SIDEBAR ============ -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-glyph">SB</div>
+                <div class="brand-meta">
+                    <span class="brand-name">SmartBin</span>
+                    <span class="brand-version">V2.1 · Pi 5</span>
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-label">Monitor</div>
+                <div class="nav-item active" data-page="dashboard" onclick="switchPage('dashboard')">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                            d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                    </svg>
+                    <span>Dashboard</span>
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-label">Operate</div>
+                <div class="nav-item" data-page="control" onclick="switchPage('control')">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                    <span>Control Panel</span>
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-label">Analytics</div>
+                <div class="nav-item" data-page="performance" onclick="switchPage('performance')">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    <span>ประเมินผล</span>
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-label">System</div>
+                <div class="nav-item" data-page="settings" onclick="switchPage('settings')">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    <span>Settings</span>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="sys-uptime">
+                    <span class="pulse-dot"></span>
+                    <span id="sidebar-uptime">System Online</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- ============ MAIN ============ -->
+        <main class="main">
+
+            <!-- ===== DASHBOARD ===== -->
+            <div id="page-dashboard" class="page active">
+                <div class="page-header">
+                    <div class="page-header-left">
+                        <h1>Dashboard</h1>
+                        <div class="page-subtitle">Real-time waste classification monitor</div>
+                    </div>
+                    <div class="header-pills">
+                        <div class="pill offline" id="status-ws">
+                            <span class="dot"></span>
+                            <span>WebSocket</span>
+                        </div>
+                        <div class="pill offline" id="status-cam">
+                            <span class="dot"></span>
+                            <span>Camera</span>
+                        </div>
+                        <div class="mode-chip auto" id="mode-badge">AUTO</div>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <!-- Stream -->
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">
+                                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                Live Stream
+                            </span>
+                            <span class="card-badge">ESP32-CAM</span>
+                        </div>
+                        <div class="stream-box" id="video-container">
+                            <img id="mjpeg-stream" alt="Camera Feed" style="display:none;">
+                            <canvas id="roi-canvas" class="roi-overlay-canvas"></canvas>
+                            <div class="stream-placeholder" id="video-placeholder">
+                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                        d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                <span>กำลังเชื่อมต่อกล้อง...</span>
+                            </div>
+                            <div class="stream-overlay" id="video-overlay-badges" style="display:none;">
+                                <div class="live-tag"><span class="rec-dot"></span>LIVE</div>
+                            </div>
+                        </div>
+
+                        <!-- ROI -->
+                        <div class="roi-panel">
+                            <div class="roi-top">
+                                <span class="roi-top-label">Focus Crop (ROI)</span>
+                                <label
+                                    style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); cursor:pointer;">
+                                    <input type="checkbox" id="roi-enabled" checked onchange="toggleROI()"> Enable
+                                </label>
+                            </div>
+                            <div class="roi-tip">ลากบนวิดีโอเพื่อเลื่อนจุดศูนย์กลาง หรือปรับค่าด้วย slider</div>
+                            <div class="roi-sliders">
+                                <div class="roi-slider-row">
+                                    <label>Center X</label>
+                                    <input type="range" class="range-input" id="roi-x" min="0" max="640" value="320"
+                                        oninput="updateROIFromSliders()">
+                                    <span class="roi-val" id="roi-x-value">320</span>
+                                </div>
+                                <div class="roi-slider-row">
+                                    <label>Center Y</label>
+                                    <input type="range" class="range-input" id="roi-y" min="0" max="480" value="240"
+                                        oninput="updateROIFromSliders()">
+                                    <span class="roi-val" id="roi-y-value">240</span>
+                                </div>
+                                <div class="roi-slider-row">
+                                    <label>Size</label>
+                                    <input type="range" class="range-input" id="roi-size" min="160" max="480"
+                                        value="320" oninput="updateROIFromSliders()">
+                                    <span class="roi-val" id="roi-size-value">320</span>
+                                </div>
+                            </div>
+                            <div class="roi-btns">
+                                <button class="btn btn-outline" onclick="resetROI()">Reset</button>
+                                <button class="btn btn-accent" onclick="saveROI()">Save to Device</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Stats + Log -->
+                    <div>
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="card-title">Classification Stats</span>
+                                <span class="card-badge" id="total-sorted">Total: 0</span>
+                            </div>
+                            <div class="grid-4">
+                                <div class="stat-tile metal">
+                                    <span class="stat-label">Metal</span>
+                                    <span class="stat-num" id="count-metal">0</span>
+                                    <div class="stat-bar">
+                                        <div class="stat-bar-fill" id="bar-metal"
+                                            style="width:0%;background:var(--c-metal);"></div>
+                                    </div>
+                                </div>
+                                <div class="stat-tile plastic">
+                                    <span class="stat-label">Plastic</span>
+                                    <span class="stat-num" id="count-plastic">0</span>
+                                    <div class="stat-bar">
+                                        <div class="stat-bar-fill" id="bar-plastic"
+                                            style="width:0%;background:var(--c-plastic);"></div>
+                                    </div>
+                                </div>
+                                <div class="stat-tile glass">
+                                    <span class="stat-label">Glass</span>
+                                    <span class="stat-num" id="count-glass">0</span>
+                                    <div class="stat-bar">
+                                        <div class="stat-bar-fill" id="bar-glass"
+                                            style="width:0%;background:var(--c-glass);"></div>
+                                    </div>
+                                </div>
+                                <div class="stat-tile reject">
+                                    <span class="stat-label">Reject</span>
+                                    <span class="stat-num" id="count-reject">0</span>
+                                    <div class="stat-bar">
+                                        <div class="stat-bar-fill" id="bar-reject"
+                                            style="width:0%;background:var(--c-reject);"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="card-title">
+                                    <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    Activity Log
+                                </span>
+                                <span class="card-badge">Last 10</span>
+                            </div>
+                            <div class="confirm-strip" id="confirm-bar" style="display:none;">
+                                <span class="confirm-label">ยืนยันผล: <strong id="confirm-predicted">-</strong></span>
+                                <button class="btn btn-outline" onclick="confirmSort('metal')"
+                                    style="color:var(--c-metal);font-size:11px;padding:4px 10px;">Metal</button>
+                                <button class="btn btn-outline" onclick="confirmSort('plastic')"
+                                    style="color:var(--c-plastic);font-size:11px;padding:4px 10px;">Plastic</button>
+                                <button class="btn btn-outline" onclick="confirmSort('glass')"
+                                    style="color:var(--c-glass);font-size:11px;padding:4px 10px;">Glass</button>
+                                <button class="btn btn-outline" onclick="confirmSort('reject')"
+                                    style="color:var(--c-reject);font-size:11px;padding:4px 10px;">Reject</button>
+                            </div>
+                            <div class="log-scroll" id="activity-log">
+                                <div class="log-empty">
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                    </svg>
+                                    ยังไม่มีกิจกรรม – รอระบบเริ่มคัดแยก
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== CONTROL PANEL ===== -->
+            <div id="page-control" class="page">
+                <div class="page-header">
+                    <div class="page-header-left">
+                        <h1>Control Panel</h1>
+                        <div class="page-subtitle">Manual servo & sorting controls</div>
+                    </div>
+                    <div class="mode-chip auto" id="mode-badge-control">AUTO</div>
+                </div>
+
+                <div class="card">
+                    <div class="section-label">System Mode</div>
+                    <div class="toggle-track" id="mode-toggle" onclick="toggleMode()">
+                        <div class="toggle-thumb"></div>
+                        <div class="toggle-options">
+                            <span>AUTO</span>
+                            <span>MANUAL</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="manual-controls">
+                    <div class="auto-notice" id="auto-message" style="display:none;">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        ระบบทำงานอัตโนมัติ — การควบคุมด้วยมือถูกปิดใช้งาน
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="card-title">Servo Capture (แขนรับ)</span>
+                                <span class="card-badge">GPIO 18</span>
+                            </div>
+                            <div class="control-row">
+                                <span class="control-key">Position</span>
+                                <div class="slider-row">
+                                    <input type="range" class="range-input" id="servo-capture" min="0" max="180"
+                                        value="92" oninput="updateSliderValue('servo-capture')">
+                                    <span class="range-val" id="servo-capture-value">92°</span>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-outline" onclick="setServo('capture',92)">Home 92°</button>
+                                <button class="btn btn-outline" onclick="setServo('capture',120)">Ready 120°</button>
+                                <button class="btn btn-outline" onclick="setServo('capture',45)">Drop 45°</button>
+                                <button class="btn btn-accent" onclick="sendServo('capture')">Apply</button>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="card-title">Servo Sort (เลือกถัง)</span>
+                                <span class="card-badge">GPIO 19</span>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-outline btn-waste metal" onclick="setServo('sort',45)">Metal
+                                    45°</button>
+                                <button class="btn btn-outline btn-waste plastic" onclick="setServo('sort',75)">Plastic
+                                    75°</button>
+                                <button class="btn btn-outline btn-waste glass" onclick="setServo('sort',105)">Glass
+                                    105°</button>
+                                <button class="btn btn-outline btn-waste reject" onclick="setServo('sort',135)">Reject
+                                    135°</button>
+                            </div>
+                            <button class="btn btn-accent" onclick="setServo('sort',92)"
+                                style="margin-top:14px;width:100%;">Reset to Home (92°)</button>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Manual Sort Trigger</span>
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            <select class="field-input" id="manual-class" style="flex:1;">
+                                <option value="metal">Metal</option>
+                                <option value="plastic">Plastic</option>
+                                <option value="glass">Glass</option>
+                                <option value="reject">Reject</option>
+                            </select>
+                            <button class="btn btn-accent" onclick="triggerManualSort()" style="min-width:140px;">Sort
+                                Now</button>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Bin Level Monitor</span>
+                            <span class="card-badge">Ultrasonic</span>
+                        </div>
+                        <div class="bin-grid">
+                            <div class="bin-cell">
+                                <div class="bin-name">Metal</div>
+                                <div class="bin-pct green" id="level-metal">0%</div><button class="btn btn-outline"
+                                    style="font-size:11px;padding:6px 10px;" onclick="resetBin('metal')">Reset</button>
+                            </div>
+                            <div class="bin-cell">
+                                <div class="bin-name">Plastic</div>
+                                <div class="bin-pct green" id="level-plastic">0%</div><button class="btn btn-outline"
+                                    style="font-size:11px;padding:6px 10px;"
+                                    onclick="resetBin('plastic')">Reset</button>
+                            </div>
+                            <div class="bin-cell">
+                                <div class="bin-name">Glass</div>
+                                <div class="bin-pct green" id="level-glass">0%</div><button class="btn btn-outline"
+                                    style="font-size:11px;padding:6px 10px;" onclick="resetBin('glass')">Reset</button>
+                            </div>
+                            <div class="bin-cell">
+                                <div class="bin-name">Reject</div>
+                                <div class="bin-pct green" id="level-reject">0%</div><button class="btn btn-outline"
+                                    style="font-size:11px;padding:6px 10px;" onclick="resetBin('reject')">Reset</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-danger-outline" onclick="resetAllServos()" style="width:100%;">Reset All
+                        Servos to Home</button>
+                </div>
+            </div>
+
+            <!-- ===== PERFORMANCE ===== -->
+            <div id="page-performance" class="page">
+                <div class="page-header">
+                    <div class="page-header-left">
+                        <h1>ผลประเมินประสิทธิภาพ</h1>
+                        <div class="page-subtitle">Performance evaluation — accuracy, precision, recall analysis</div>
+                    </div>
+                    <div class="header-pills">
+                        <button class="btn btn-outline" onclick="loadPerformanceData()">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Refresh
+                        </button>
+                        <button class="btn btn-danger-outline" onclick="resetPerformanceData()">Reset Data</button>
+                    </div>
+                </div>
+
+                <div class="kpi-row">
+                    <div class="kpi-card">
+                        <div class="kpi-label">Overall Accuracy</div>
+                        <div class="kpi-value" id="perf-overall-accuracy">-<span class="kpi-unit">%</span></div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">Total Sorted</div>
+                        <div class="kpi-value" id="perf-total-samples">0</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">Avg Sort Time</div>
+                        <div class="kpi-value" id="perf-avg-time">-<span class="kpi-unit">ms</span></div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">Records</div>
+                        <div class="kpi-value" id="perf-total-records">0</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">รายการประเมินประสิทธิภาพ</span>
+                    </div>
+                    <div class="data-table-wrap">
+                        <table class="data-table" id="perf-metrics-table">
+                            <thead>
+                                <tr>
+                                    <th>รายการประเมิน</th>
+                                    <th>Accuracy</th>
+                                    <th>Error</th>
+                                    <th>Precision</th>
+                                    <th>Recall</th>
+                                    <th>F1 Score</th>
+                                    <th>Samples</th>
+                                    <th>ผลประเมิน</th>
+                                </tr>
+                            </thead>
+                            <tbody id="perf-table-body">
+                                <tr>
+                                    <td class="row-label"><span class="class-dot"
+                                            style="background:var(--c-metal)"></span>Metal</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>0</td>
+                                    <td><span class="result-badge nodata">ยังไม่มีข้อมูล</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="row-label"><span class="class-dot"
+                                            style="background:var(--c-plastic)"></span>Plastic</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>0</td>
+                                    <td><span class="result-badge nodata">ยังไม่มีข้อมูล</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="row-label"><span class="class-dot"
+                                            style="background:var(--c-glass)"></span>Glass</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>0</td>
+                                    <td><span class="result-badge nodata">ยังไม่มีข้อมูล</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="row-label"><span class="class-dot"
+                                            style="background:var(--c-reject)"></span>Reject</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>0</td>
+                                    <td><span class="result-badge nodata">ยังไม่มีข้อมูล</span></td>
+                                </tr>
+                                <tr class="overall-row">
+                                    <td class="row-label"><strong>Overall (Macro Avg)</strong></td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>0</td>
+                                    <td><span class="result-badge nodata">ยังไม่มีข้อมูล</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Confusion Matrix</span>
+                        <span class="card-badge">แถว = ค่าจริง · คอลัมน์ = ค่าทำนาย</span>
+                    </div>
+                    <div style="text-align:center;">
+                        <div class="cm-wrap">
+                            <table class="cm-table" id="confusion-matrix-table">
+                                <thead>
+                                    <tr>
+                                        <th class="cm-corner">Actual ↓ / Pred →</th>
+                                        <th>Metal</th>
+                                        <th>Plastic</th>
+                                        <th>Glass</th>
+                                        <th>Reject</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cm-body">
+                                    <tr>
+                                        <td><strong>Metal</strong></td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Plastic</strong></td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Glass</strong></td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Reject</strong></td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                        <td>0</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="confusion-alert" id="confused-alert" style="display:none;">
+                        <span style="font-size:18px;">⚠️</span>
+                        <div>ระบบมักสับสนระหว่าง <strong id="confused-from">-</strong> กับ <strong
+                                id="confused-to">-</strong> มากที่สุด (<span id="confused-count"
+                                style="font-family:var(--ff-mono);">0</span> ครั้ง)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== SETTINGS ===== -->
+            <div id="page-settings" class="page">
+                <div class="page-header">
+                    <div class="page-header-left">
+                        <h1>Settings</h1>
+                        <div class="page-subtitle">Connection & device configuration</div>
+                    </div>
+                </div>
+
+                <div class="ws-bar connected" id="ws-status">
+                    <div class="ws-dot"></div>
+                    <span id="ws-status-text">WebSocket Connected</span>
+                    <button class="btn btn-outline" style="margin-left:auto;font-size:11px;padding:6px 14px;"
+                        onclick="reconnectWebSocket()">Reconnect</button>
+                </div>
+
+                <div class="card">
+                    <div class="card-header"><span class="card-title">WiFi Provisioning (ESP32-CAM)</span></div>
+                    <div class="field-group">
+                        <span class="field-label">Network Name (SSID)</span>
+                        <input type="text" class="field-input" id="wifi-ssid" placeholder="Enter WiFi name">
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">Password</span>
+                        <input type="password" class="field-input" id="wifi-password" placeholder="Enter password">
+                    </div>
+                    <button class="btn btn-accent" onclick="provisionWiFi()">Update ESP32-CAM WiFi</button>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">WiFi Hotspot (Pi5 AP)</span>
+                        <span class="card-badge" id="hotspot-badge"
+                            style="background:var(--c-reject);color:#fff;">OFF</span>
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">Hotspot SSID</span>
+                        <input type="text" class="field-input" id="hotspot-ssid" placeholder="SmartBin_AP"
+                            value="SmartBin_AP">
+                    </div>
+                    <div class="field-group">
+                        <span class="field-label">Hotspot Password</span>
+                        <input type="text" class="field-input" id="hotspot-password" placeholder="smartbin123"
+                            value="smartbin123">
+                    </div>
+                    <div id="hotspot-info" style="margin-bottom:12px;font-size:12px;color:var(--c-muted);display:none;">
+                        <span>🌐 IP: <strong id="hotspot-ip">-</strong></span>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-accent" id="hotspot-start-btn" onclick="toggleHotspot()">Start
+                            Hotspot</button>
+                        <button class="btn btn-outline" onclick="refreshHotspotStatus()">Refresh Status</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Serial Debug (ESP32)</span>
+                        <span class="card-badge" id="serial-badge"
+                            style="background:var(--c-muted);color:#fff;">—</span>
+                    </div>
+                    <div id="serial-log"
+                        style="background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;padding:10px;font-family:var(--ff-mono);font-size:11px;max-height:220px;overflow-y:auto;margin-bottom:12px;">
+                        <div style="color:var(--c-muted);text-align:center;padding:16px 0;">กด Refresh เพื่อโหลด debug
+                            log</div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-outline" onclick="refreshSerialDebug()">Refresh Log</button>
+                        <button class="btn btn-danger-outline" onclick="clearSerialDebug()">Clear Log</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header"><span class="card-title">Raspberry Pi Connection</span></div>
+                    <div class="field-group">
+                        <span class="field-label">Pi IP Address</span>
+                        <input type="text" class="field-input" id="pi-ip" placeholder="192.168.1.100"
+                            value="192.168.1.100">
+                    </div>
+                    <button class="btn btn-outline" onclick="savePiIp()">Save & Reconnect</button>
+                </div>
+
+                <div class="card">
+                    <div class="card-header"><span class="card-title">Data Management</span></div>
+                    <div class="btn-group">
+                        <button class="btn btn-danger-outline" onclick="clearAllStats()">Clear Statistics</button>
+                        <button class="btn btn-danger-outline" onclick="resetPerformanceData()">Clear Performance
+                            Data</button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-tray" id="toast-container"></div>
+
+    <script>
+        // =====================================================================
+        // CONFIG
+        // =====================================================================
+        const PI_IP = localStorage.getItem('pi_ip') || window.location.hostname || '192.168.1.100';
+        const WS_URL = `ws://${PI_IP}:8000/ws`;
+        const API_BASE = `http://${PI_IP}:8000`;
+        const MJPEG_URL = `${API_BASE}/api/stream`;
+        const CLASS_NAMES = ['metal', 'plastic', 'glass', 'reject'];
+        const CLASS_COLORS = { metal: 'var(--c-metal)', plastic: 'var(--c-plastic)', glass: 'var(--c-glass)', reject: 'var(--c-reject)' };
+
+        // =====================================================================
+        // STATE
+        // =====================================================================
+        let ws = null;
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT = 10;
+        const BASE_DELAY_MS = 1000;
+        let isManualMode = false;
+        let stats = { metal: 0, plastic: 0, glass: 0, reject: 0, total: 0 };
+        let activityLog = [];
+        let servoPositions = { capture: 92, sort: 92 };
+        let lastPredictedClass = null;
+
+        // =====================================================================
+        // INIT
+        // =====================================================================
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('pi-ip').value = PI_IP;
+            connectWebSocket();
+            initMJPEG();
+            initROI();
+            fetchSystemStatus();
+            fetchBinLevels();
+            refreshHotspotStatus();
+            refreshSerialDebug();
+        });
+
+        // =====================================================================
+        // NAVIGATION
+        // =====================================================================
+        function switchPage(id) {
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === id));
+            document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === `page-${id}`));
+            if (id === 'performance') loadPerformanceData();
+        }
+
+        // =====================================================================
+        // MJPEG
+        // =====================================================================
+        function initMJPEG() {
+            const img = document.getElementById('mjpeg-stream');
+            const ph = document.getElementById('video-placeholder');
+            const ov = document.getElementById('video-overlay-badges');
+            img.src = MJPEG_URL;
+            img.onload = () => { img.style.display = 'block'; ph.style.display = 'none'; ov.style.display = 'flex'; updatePill('status-cam', 'online', 'Camera Live'); };
+            img.onerror = () => { img.style.display = 'none'; ph.style.display = 'flex'; ov.style.display = 'none'; updatePill('status-cam', 'warning', 'Camera Offline'); setTimeout(() => { img.src = MJPEG_URL + '?t=' + Date.now(); }, 5000); };
+        }
+
+        // =====================================================================
+        // WEBSOCKET
+        // =====================================================================
+        function connectWebSocket() {
+            if (ws) ws.close();
+            updateWs('reconnecting', 'กำลังเชื่อมต่อ...');
+            ws = new WebSocket(WS_URL);
+            ws.onopen = () => { reconnectAttempts = 0; updateWs('connected', 'WebSocket Connected'); updatePill('status-ws', 'online', 'Connected'); showToast('เชื่อมต่อกับ SmartBin V2 แล้ว', 'success'); ws.send(JSON.stringify({ action: 'get_stats' })); };
+            ws.onmessage = (e) => { try { handleMsg(JSON.parse(e.data)); } catch (err) { console.error('WS parse error:', err); } };
+            ws.onclose = () => { updateWs('disconnected', 'Disconnected'); updatePill('status-ws', 'offline', 'Disconnected'); attemptReconnect(); };
+            ws.onerror = () => { updateWs('disconnected', 'Connection Error'); };
+        }
+
+        function attemptReconnect() {
+            if (reconnectAttempts >= MAX_RECONNECT) { showToast('เชื่อมต่อไม่สำเร็จ กรุณารีเฟรชหน้า', 'error'); return; }
+            reconnectAttempts++;
+            const delay = Math.min(BASE_DELAY_MS * Math.pow(2, reconnectAttempts - 1), 30000);
+            updateWs('reconnecting', `กำลังเชื่อมต่อใหม่... (${reconnectAttempts}/${MAX_RECONNECT})`);
+            setTimeout(connectWebSocket, delay);
+        }
+
+        function reconnectWebSocket() { reconnectAttempts = 0; connectWebSocket(); }
+
+        // =====================================================================
+        // MESSAGE HANDLER
+        // =====================================================================
+        function handleMsg(msg) {
+            switch (msg.type) {
+                case 'connected': if (msg.stats) refreshStats(msg.stats); break;
+                case 'sort_result': if (msg.data) onSortResult(msg.data); if (msg.stats) refreshStats(msg.stats); break;
+                case 'stats': if (msg.data) refreshStats(msg.data); break;
+                case 'system_status': onSystemStatus(msg); break;
+                case 'bin_levels': if (msg.levels) showBinLevels(msg.levels); break;
+                case 'pong': break;
+            }
+        }
+
+        // =====================================================================
+        // STATS
+        // =====================================================================
+        function refreshStats(s) {
+            if (s.by_class) { stats.metal = s.by_class.metal || 0; stats.plastic = s.by_class.plastic || 0; stats.glass = s.by_class.glass || 0; stats.reject = s.by_class.reject || 0; }
+            stats.total = s.total_sorted !== undefined ? s.total_sorted : (stats.metal + stats.plastic + stats.glass + stats.reject);
+            document.getElementById('count-metal').textContent = stats.metal;
+            document.getElementById('count-plastic').textContent = stats.plastic;
+            document.getElementById('count-glass').textContent = stats.glass;
+            document.getElementById('count-reject').textContent = stats.reject;
+            document.getElementById('total-sorted').textContent = `Total: ${stats.total}`;
+            const mx = Math.max(stats.total, 1);
+            document.getElementById('bar-metal').style.width = `${(stats.metal / mx) * 100}%`;
+            document.getElementById('bar-plastic').style.width = `${(stats.plastic / mx) * 100}%`;
+            document.getElementById('bar-glass').style.width = `${(stats.glass / mx) * 100}%`;
+            document.getElementById('bar-reject').style.width = `${(stats.reject / mx) * 100}%`;
+            updateBinCounts();
+        }
+
+        function onSortResult(d) {
+            const cls = d.class || d.class_;
+            activityLog.unshift({ time: new Date().toLocaleTimeString('th-TH'), class: cls, confidence: d.confidence ? (d.confidence * 100).toFixed(1) + '%' : 'N/A' });
+            if (activityLog.length > 10) activityLog.pop();
+            renderLog();
+            lastPredictedClass = cls;
+            const cb = document.getElementById('confirm-bar');
+            document.getElementById('confirm-predicted').textContent = cls.toUpperCase();
+            cb.style.display = 'flex';
+            setTimeout(() => { cb.style.display = 'none'; }, 30000);
+        }
+
+        function renderLog() {
+            const c = document.getElementById('activity-log');
+            if (!activityLog.length) { c.innerHTML = '<div class="log-empty"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>ยังไม่มีกิจกรรม – รอระบบเริ่มคัดแยก</div>'; return; }
+            c.innerHTML = activityLog.map(e => `<div class="log-row"><span class="log-time">${e.time}</span><span class="log-tag ${e.class}">${e.class}</span><span class="log-conf">${e.confidence}</span></div>`).join('');
+        }
+
+        function confirmSort(actual) {
+            fetch(`${API_BASE}/api/performance/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actual_class: actual }) })
+                .then(r => r.json()).then(d => {
+                    if (d.success) { document.getElementById('confirm-bar').style.display = 'none'; showToast(lastPredictedClass === actual ? `✓ ถูกต้อง: ${actual}` : `✗ แก้ไข: ${lastPredictedClass} → ${actual}`, lastPredictedClass === actual ? 'success' : 'warning'); }
+                }).catch(e => showToast('Error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // SYSTEM STATUS
+        // =====================================================================
+        function fetchSystemStatus() {
+            fetch(`${API_BASE}/api/system-status`).then(r => r.json()).then(d => { if (d.success) { isManualMode = (d.mode === 'manual'); syncModeUI(); } }).catch(() => { });
+        }
+
+        function onSystemStatus(msg) {
+            if (msg.mode) { isManualMode = (msg.mode === 'manual'); syncModeUI(); }
+            if (msg.servo_capture !== undefined) { document.getElementById('servo-capture').value = msg.servo_capture; updateSliderValue('servo-capture'); }
+        }
+
+        function syncModeUI() {
+            const t = document.getElementById('mode-toggle');
+            const badges = document.querySelectorAll('.mode-chip');
+            const notice = document.getElementById('auto-message');
+            const mc = document.getElementById('manual-controls');
+            if (isManualMode) {
+                t.classList.add('manual');
+                badges.forEach(b => { b.classList.remove('auto'); b.classList.add('manual'); b.textContent = 'MANUAL'; });
+                notice.style.display = 'none'; mc.classList.remove('disabled-zone');
+            } else {
+                t.classList.remove('manual');
+                badges.forEach(b => { b.classList.remove('manual'); b.classList.add('auto'); b.textContent = 'AUTO'; });
+                notice.style.display = 'flex'; mc.classList.add('disabled-zone');
+            }
+        }
+
+        function updateWs(state, txt) { const el = document.getElementById('ws-status'); el.className = 'ws-bar ' + state; document.getElementById('ws-status-text').textContent = txt; }
+        function updatePill(id, state, txt) { const p = document.getElementById(id); if (!p) return; p.className = 'pill ' + state; p.querySelector('span:last-child').textContent = txt; }
+
+        // =====================================================================
+        // MODE
+        // =====================================================================
+        function toggleMode() {
+            const mode = isManualMode ? 'auto' : 'manual';
+            fetch(`${API_BASE}/control/mode`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
+                .then(r => r.json()).then(d => {
+                    if (d.success) { isManualMode = (mode === 'manual'); syncModeUI(); showToast(`เปลี่ยนเป็นโหมด ${mode.toUpperCase()}`, 'success'); }
+                    else showToast(d.detail || 'ไม่สามารถเปลี่ยนโหมดได้', 'error');
+                }).catch(e => showToast('Connection error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // SERVO
+        // =====================================================================
+        function updateSliderValue(id) { const s = document.getElementById(id); document.getElementById(id + '-value').textContent = s.value + '°'; servoPositions.capture = parseInt(s.value); }
+        function setServo(name, val) { if (name === 'capture') { document.getElementById('servo-capture').value = val; updateSliderValue('servo-capture'); } servoPositions[name] = val; sendServo(name); }
+        function sendServo(name) {
+            const val = servoPositions[name];
+            fetch(`${API_BASE}/control/servo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, angle: val }) })
+                .then(r => r.json()).then(d => { if (d.success) showToast(`Servo ${name} → ${val}°`, 'success'); else showToast(d.detail || 'ไม่สามารถขยับ servo ได้', 'error'); })
+                .catch(e => showToast('Connection error: ' + e.message, 'error'));
+        }
+        function resetAllServos() {
+            fetch(`${API_BASE}/control/servo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'all', angle: 'home' }) })
+                .then(r => r.json()).then(d => { if (d.success) { document.getElementById('servo-capture').value = 92; updateSliderValue('servo-capture'); servoPositions.sort = 92; showToast('Servos reset to home', 'success'); } else showToast(d.detail || 'ไม่สำเร็จ', 'error'); })
+                .catch(e => showToast('Connection error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // MANUAL SORT
+        // =====================================================================
+        function triggerManualSort() {
+            const cls = document.getElementById('manual-class').value;
+            fetch(`${API_BASE}/control/sort`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ class: cls }) })
+                .then(r => r.json()).then(d => { if (d.success) showToast(`Manual sort: ${cls}`, 'success'); else showToast(d.detail || 'ไม่สำเร็จ', 'error'); })
+                .catch(e => showToast('Connection error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // BIN LEVELS
+        // =====================================================================
+        function fetchBinLevels() { fetch(`${API_BASE}/api/bin-levels`).then(r => r.json()).then(d => { if (d.success && d.levels) showBinLevels(d.levels); }).catch(() => { }); }
+        function showBinLevels(levels) {
+            const map = { bin1: 'metal', bin2: 'plastic', bin3: 'glass', bin4: 'reject' };
+            Object.entries(map).forEach(([bin, cls]) => {
+                const el = document.getElementById(`level-${cls}`);
+                if (el && levels[bin] !== undefined) { const d = levels[bin]; const pct = Math.max(0, Math.min(100, ((50 - d) / 45) * 100)); el.textContent = `${Math.round(pct)}%`; el.className = `bin-pct ${pct > 80 ? 'red' : pct > 50 ? 'yellow' : 'green'}`; el.dataset.ultrasonic = '1'; }
+            });
+        }
+        function updateBinCounts() {
+            CLASS_NAMES.forEach(cls => { const el = document.getElementById(`level-${cls}`); if (!el || el.dataset.ultrasonic) return; const c = stats[cls] || 0; const p = Math.min((c / 100) * 100, 100); el.textContent = `${Math.round(p)}%`; el.className = `bin-pct ${c > 80 ? 'red' : c > 50 ? 'yellow' : 'green'}`; });
+        }
+        function resetBin(cls) { stats[cls] = 0; stats.total = stats.metal + stats.plastic + stats.glass + stats.reject; refreshStats({ by_class: stats, total_sorted: stats.total }); showToast(`${cls} bin reset`, 'success'); }
+
+        // =====================================================================
+        // SETTINGS
+        // =====================================================================
+        function provisionWiFi() {
+            const s = document.getElementById('wifi-ssid').value.trim(), p = document.getElementById('wifi-password').value;
+            if (!s) { showToast('กรุณาใส่ SSID', 'error'); return; }
+            showToast('กำลังส่ง WiFi ไปยัง ESP32...', 'info');
+            fetch(`${API_BASE}/api/provision`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssid: s, password: p }) })
+                .then(r => r.json()).then(d => {
+                    if (d.success) {
+                        showToast('ส่ง WiFi ไปยัง ESP32-CAM แล้ว', 'success');
+                        document.getElementById('wifi-ssid').value = '';
+                        document.getElementById('wifi-password').value = '';
+                        // Auto-refresh serial debug to show ESP32 response
+                        setTimeout(() => refreshSerialDebug(), 1000);
+                        setTimeout(() => refreshSerialDebug(), 3000);
+                    } else showToast(d.detail || 'Failed', 'error');
+                })
+                .catch(e => showToast('Error: ' + e.message, 'error'));
+        }
+        function savePiIp() { const ip = document.getElementById('pi-ip').value.trim(); if (!ip) { showToast('กรุณาใส่ IP', 'error'); return; } localStorage.setItem('pi_ip', ip); showToast('บันทึก IP แล้ว กำลัง refresh...', 'success'); setTimeout(() => location.reload(), 1000); }
+        function clearAllStats() {
+            if (!confirm('ต้องการล้างสถิติทั้งหมด?')) return;
+            fetch(`${API_BASE}/reset-stats`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(r => r.json()).then(d => { if (d.success) { stats = { metal: 0, plastic: 0, glass: 0, reject: 0, total: 0 }; activityLog = []; refreshStats({ by_class: stats, total_sorted: 0 }); renderLog(); showToast('ล้างสถิติทั้งหมดแล้ว', 'success'); } else showToast(d.detail || 'ไม่สำเร็จ', 'error'); })
+                .catch(e => showToast('Error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // PERFORMANCE
+        // =====================================================================
+        function loadPerformanceData() {
+            fetch(`${API_BASE}/api/performance`).then(r => r.json()).then(d => { if (d.success) renderPerf(d.data); }).catch(e => { showToast('ไม่สามารถโหลดข้อมูลประเมินผลได้', 'error'); });
+        }
+
+        function renderPerf(perf) {
+            const ov = perf.overall || {};
+            document.getElementById('perf-overall-accuracy').innerHTML = (ov.total_samples > 0 ? ov.accuracy : '-') + '<span class="kpi-unit">%</span>';
+            document.getElementById('perf-total-samples').textContent = ov.total_samples || 0;
+            document.getElementById('perf-avg-time').innerHTML = (perf.avg_sort_time_ms > 0 ? perf.avg_sort_time_ms : '-') + '<span class="kpi-unit">ms</span>';
+            document.getElementById('perf-total-records').textContent = perf.total_records || 0;
+
+            const bc = perf.by_class || {};
+            let rows = '';
+            CLASS_NAMES.forEach(cls => {
+                const m = bc[cls] || {}; const has = (m.total_samples || 0) > 0;
+                rows += `<tr><td class="row-label"><span class="class-dot" style="background:${CLASS_COLORS[cls]}"></span>${cls.charAt(0).toUpperCase() + cls.slice(1)}</td><td>${has ? m.accuracy + '%' : '-'}</td><td>${has ? m.error + '%' : '-'}</td><td>${has ? m.precision + '%' : '-'}</td><td>${has ? m.recall + '%' : '-'}</td><td>${has ? m.f1_score + '%' : '-'}</td><td>${m.total_samples || 0}</td><td>${badge(m.accuracy, has)}</td></tr>`;
+            });
+            const hd = (ov.total_samples || 0) > 0;
+            rows += `<tr class="overall-row"><td class="row-label"><strong>Overall (Macro Avg)</strong></td><td>${hd ? ov.accuracy + '%' : '-'}</td><td>${hd ? ov.error + '%' : '-'}</td><td>${hd ? ov.precision + '%' : '-'}</td><td>${hd ? ov.recall + '%' : '-'}</td><td>${hd ? ov.f1_score + '%' : '-'}</td><td>${ov.total_samples || 0}</td><td>${badge(ov.accuracy, hd)}</td></tr>`;
+            document.getElementById('perf-table-body').innerHTML = rows;
+
+            renderCM(perf.confusion_matrix || {});
+
+            const mc = perf.most_confused || {};
+            const ca = document.getElementById('confused-alert');
+            if (mc.count > 0) { ca.style.display = 'flex'; document.getElementById('confused-from').textContent = mc.from.toUpperCase(); document.getElementById('confused-to').textContent = mc.to.toUpperCase(); document.getElementById('confused-count').textContent = mc.count; }
+            else ca.style.display = 'none';
+        }
+
+        function badge(acc, has) {
+            if (!has) return '<span class="result-badge nodata">ยังไม่มีข้อมูล</span>';
+            if (acc >= 90) return '<span class="result-badge pass">✓ ดีมาก</span>';
+            if (acc >= 75) return '<span class="result-badge pass">✓ ผ่าน</span>';
+            if (acc >= 50) return '<span class="result-badge warn">⚠ ปานกลาง</span>';
+            return '<span class="result-badge fail">✗ ต้องปรับปรุง</span>';
+        }
+
+        function renderCM(cm) {
+            const tb = document.getElementById('cm-body'); if (!cm || !Object.keys(cm).length) return;
+            let mx = 0; CLASS_NAMES.forEach(a => CLASS_NAMES.forEach(p => { const v = (cm[a] && cm[a][p]) || 0; if (v > mx) mx = v; }));
+            let rows = '';
+            CLASS_NAMES.forEach(a => {
+                rows += '<tr>';
+                rows += `<td><strong>${a.charAt(0).toUpperCase() + a.slice(1)}</strong></td>`;
+                CLASS_NAMES.forEach(p => {
+                    const v = (cm[a] && cm[a][p]) || 0; const diag = (a === p); const i = mx > 0 ? v / mx : 0;
+                    const bg = diag ? `rgba(52,211,153,${0.08 + i * 0.3})` : v > 0 ? `rgba(251,113,133,${0.04 + i * 0.25})` : 'transparent';
+                    rows += `<td class="${diag ? 'cm-diagonal' : ''} cm-val" style="background:${bg};">${v}</td>`;
+                });
+                rows += '</tr>';
+            });
+            tb.innerHTML = rows;
+        }
+
+        function resetPerformanceData() {
+            if (!confirm('ต้องการล้างข้อมูลผลประเมินทั้งหมด?')) return;
+            fetch(`${API_BASE}/api/performance/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(r => r.json()).then(d => { if (d.success) { showToast('ล้างข้อมูลผลประเมินแล้ว', 'success'); loadPerformanceData(); } })
+                .catch(e => showToast('Error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // ROI
+        // =====================================================================
+        let roi = { enabled: true, centerX: 320, centerY: 240, size: 320, isDragging: false };
+
+        function initROI() {
+            const cv = document.getElementById('roi-canvas'), ct = document.getElementById('video-container');
+            cv.width = ct.offsetWidth; cv.height = ct.offsetHeight;
+            fetch(`${API_BASE}/api/roi`).then(r => r.json()).then(d => { if (d.success && d.roi) { roi.enabled = d.roi.enabled; roi.centerX = d.roi.center_x; roi.centerY = d.roi.center_y; roi.size = d.roi.size; syncROIUI(); drawROI(); } }).catch(() => { });
+            cv.addEventListener('mousedown', e => { if (!roi.enabled) return; roi.isDragging = true; roiFromMouse(e); });
+            cv.addEventListener('mousemove', e => { if (!roi.isDragging || !roi.enabled) return; roiFromMouse(e); });
+            cv.addEventListener('mouseup', () => { roi.isDragging = false; });
+            cv.addEventListener('mouseleave', () => { roi.isDragging = false; });
+            window.addEventListener('resize', () => { cv.width = ct.offsetWidth; cv.height = ct.offsetHeight; drawROI(); });
+            drawROI();
+        }
+
+        function drawROI() {
+            const cv = document.getElementById('roi-canvas'), ctx = cv.getContext('2d');
+            ctx.clearRect(0, 0, cv.width, cv.height);
+            if (!roi.enabled) return;
+            const sx = cv.width / 640, sy = cv.height / 480, cx = roi.centerX * sx, cy = roi.centerY * sy, hs = (roi.size / 2) * Math.min(sx, sy);
+            ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, cv.width, cv.height);
+            ctx.globalCompositeOperation = 'destination-out'; ctx.fillRect(cx - hs, cy - hs, hs * 2, hs * 2); ctx.globalCompositeOperation = 'source-over';
+            ctx.strokeStyle = '#34d399'; ctx.lineWidth = 2; ctx.strokeRect(cx - hs, cy - hs, hs * 2, hs * 2);
+            ctx.beginPath(); ctx.moveTo(cx - 18, cy); ctx.lineTo(cx + 18, cy); ctx.moveTo(cx, cy - 18); ctx.lineTo(cx, cy + 18); ctx.stroke();
+            ctx.fillStyle = '#34d399'; ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+            ctx.font = '11px "JetBrains Mono"'; ctx.fillText(`ROI ${roi.centerX},${roi.centerY} · ${roi.size}px`, cx - hs, cy - hs - 6);
+        }
+
+        function roiFromMouse(e) {
+            const cv = document.getElementById('roi-canvas'), r = cv.getBoundingClientRect();
+            roi.centerX = Math.round(Math.max(0, Math.min(640, (e.clientX - r.left) * (640 / cv.width))));
+            roi.centerY = Math.round(Math.max(0, Math.min(480, (e.clientY - r.top) * (480 / cv.height))));
+            syncROIUI(); drawROI();
+        }
+
+        function updateROIFromSliders() {
+            roi.enabled = document.getElementById('roi-enabled').checked;
+            roi.centerX = parseInt(document.getElementById('roi-x').value);
+            roi.centerY = parseInt(document.getElementById('roi-y').value);
+            roi.size = parseInt(document.getElementById('roi-size').value);
+            syncROIUI(); drawROI();
+        }
+
+        function syncROIUI() {
+            document.getElementById('roi-enabled').checked = roi.enabled;
+            document.getElementById('roi-x').value = roi.centerX; document.getElementById('roi-x-value').textContent = roi.centerX;
+            document.getElementById('roi-y').value = roi.centerY; document.getElementById('roi-y-value').textContent = roi.centerY;
+            document.getElementById('roi-size').value = roi.size; document.getElementById('roi-size-value').textContent = roi.size;
+        }
+
+        function toggleROI() { roi.enabled = document.getElementById('roi-enabled').checked; drawROI(); }
+        function resetROI() { roi = { centerX: 320, centerY: 240, size: 320, enabled: true, isDragging: false }; syncROIUI(); drawROI(); }
+
+        async function saveROI() {
+            try {
+                const r = await fetch(`${API_BASE}/api/roi`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: roi.enabled, center_x: roi.centerX, center_y: roi.centerY, size: roi.size }) });
+                const d = await r.json();
+                showToast(d.success ? 'บันทึก ROI แล้ว' : 'บันทึกไม่สำเร็จ', d.success ? 'success' : 'error');
+            } catch (e) { showToast('Error: ' + e.message, 'error'); }
+        }
+
+        // =====================================================================
+        // TOAST
+        // =====================================================================
+        function showToast(msg, type = 'info') {
+            const c = document.getElementById('toast-container'), t = document.createElement('div');
+            t.className = `toast ${type}`; t.textContent = msg; c.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(100%)'; t.style.transition = 'all 0.3s var(--ease)'; setTimeout(() => t.remove(), 300); }, 4000);
+        }
+
+        // =====================================================================
+        // HOTSPOT MANAGEMENT
+        // =====================================================================
+        let hotspotActive = false;
+
+        function refreshHotspotStatus() {
+            fetch(`${API_BASE}/api/hotspot/status`).then(r => r.json()).then(d => {
+                if (d.success) updateHotspotUI(d);
+            }).catch(e => showToast('Hotspot status error: ' + e.message, 'error'));
+        }
+
+        function updateHotspotUI(data) {
+            hotspotActive = data.active;
+            const badge = document.getElementById('hotspot-badge');
+            const btn = document.getElementById('hotspot-start-btn');
+            const info = document.getElementById('hotspot-info');
+            const ipEl = document.getElementById('hotspot-ip');
+            if (data.active) {
+                badge.textContent = 'ACTIVE'; badge.style.background = 'var(--c-glass)';
+                btn.textContent = 'Stop Hotspot'; btn.classList.add('btn-danger-outline'); btn.classList.remove('btn-accent');
+                info.style.display = 'block'; ipEl.textContent = data.ip || '10.42.0.1';
+                if (data.ssid) { document.getElementById('hotspot-ssid').value = data.ssid; }
+            } else {
+                badge.textContent = 'OFF'; badge.style.background = 'var(--c-reject)';
+                btn.textContent = 'Start Hotspot'; btn.classList.remove('btn-danger-outline'); btn.classList.add('btn-accent');
+                info.style.display = 'none';
+            }
+        }
+
+        function toggleHotspot() {
+            if (hotspotActive) {
+                fetch(`${API_BASE}/api/hotspot/stop`, { method: 'POST' })
+                    .then(r => r.json()).then(d => { updateHotspotUI({ active: false }); showToast('Hotspot stopped', 'success'); refreshSerialDebug(); })
+                    .catch(e => showToast('Error: ' + e.message, 'error'));
+            } else {
+                const ssid = document.getElementById('hotspot-ssid').value.trim();
+                const pw = document.getElementById('hotspot-password').value;
+                if (!ssid) { showToast('กรุณาใส่ SSID', 'error'); return; }
+                showToast('กำลังสร้าง Hotspot...', 'info');
+                fetch(`${API_BASE}/api/hotspot/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssid, password: pw }) })
+                    .then(r => r.json()).then(d => {
+                        if (d.success) { updateHotspotUI(d); showToast(d.message, 'success'); refreshSerialDebug(); }
+                        else showToast(d.detail || 'Failed', 'error');
+                    }).catch(e => showToast('Error: ' + e.message, 'error'));
+            }
+        }
+
+        // =====================================================================
+        // SERIAL DEBUG LOG
+        // =====================================================================
+        function refreshSerialDebug() {
+            fetch(`${API_BASE}/api/serial/debug`).then(r => r.json()).then(d => {
+                if (!d.success) return;
+                const sb = document.getElementById('serial-badge');
+                if (d.serial_connected) { sb.textContent = d.serial_port || 'Connected'; sb.style.background = 'var(--c-glass)'; }
+                else { sb.textContent = 'Disconnected'; sb.style.background = 'var(--c-muted)'; }
+                renderSerialLog(d.log);
+            }).catch(e => showToast('Debug log error: ' + e.message, 'error'));
+        }
+
+        function renderSerialLog(log) {
+            const el = document.getElementById('serial-log');
+            if (!log || !log.length) {
+                el.innerHTML = '<div style="color:var(--c-muted);text-align:center;padding:16px 0;">ยังไม่มี log</div>';
+                return;
+            }
+            const colors = { 'TX': '#60a5fa', 'RX': '#34d399', 'SYS': '#fbbf24' };
+            el.innerHTML = log.map(e => {
+                const c = colors[e.direction] || 'var(--c-muted)';
+                return `<div style="margin-bottom:3px;"><span style="color:var(--c-muted);margin-right:8px;">${e.time}</span><span style="color:${c};font-weight:600;margin-right:6px;">[${e.direction}]</span><span style="color:var(--c-text);">${e.message}</span></div>`;
+            }).join('');
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function clearSerialDebug() {
+            fetch(`${API_BASE}/api/serial/debug/clear`, { method: 'POST' }).then(() => {
+                document.getElementById('serial-log').innerHTML = '<div style="color:var(--c-muted);text-align:center;padding:16px 0;">Log cleared</div>';
+                showToast('Debug log cleared', 'success');
+            }).catch(e => showToast('Error: ' + e.message, 'error'));
+        }
+
+        // =====================================================================
+        // HEARTBEAT
+        // =====================================================================
+        setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' })); }, 30000);
+    </script>
+</body>
+
+</html>
