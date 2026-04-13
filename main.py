@@ -776,13 +776,14 @@ class SmartBinEngine:
 
                 # ── distance readings ────────────────────────────────
                 dist_main = hw.read_distance(Config.TRIG_PIN, Config.ECHO_PIN)
-                full_bin  = hw.check_bins_full()
-
                 # ── bin distances (all 4) ─────────────────────────────
                 bin_dists = [
                     hw.read_distance(Config.BIN_TRIG_PINS[i], Config.BIN_ECHO_PINS[i])
                     for i in range(len(Config.BIN_TRIG_PINS))
                 ]
+                
+                # Check fullness without polling sensors a second time (prevents lag)
+                full_bin = next((i + 1 for i, d in enumerate(bin_dists) if d < Config.BIN_FULL_DISTANCE_CM), None)
 
                 # ── push to shared state ──────────────────────────────
                 if system_state:

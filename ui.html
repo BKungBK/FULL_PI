@@ -448,10 +448,10 @@ table.mt tr:hover td{background:var(--s2)}
       <div class="card">
         <div class="clabel">Bin Fill Level</div>
         <div class="bins-row">
-          <div class="bin-col"><div class="bin-track"><div class="bin-fill" id="bf1" style="height:0"></div></div><div class="bin-lbl">B1</div></div>
-          <div class="bin-col"><div class="bin-track"><div class="bin-fill" id="bf2" style="height:0"></div></div><div class="bin-lbl">B2</div></div>
-          <div class="bin-col"><div class="bin-track"><div class="bin-fill" id="bf3" style="height:0"></div></div><div class="bin-lbl">B3</div></div>
-          <div class="bin-col"><div class="bin-track"><div class="bin-fill" id="bf4" style="height:0"></div></div><div class="bin-lbl">B4</div></div>
+          <div class="bin-col"><div style="font-family:var(--mono);font-size:9px;color:var(--t2)" id="bv1">—</div><div class="bin-track"><div class="bin-fill" id="bf1" style="height:0"></div></div><div class="bin-lbl">B1</div></div>
+          <div class="bin-col"><div style="font-family:var(--mono);font-size:9px;color:var(--t2)" id="bv2">—</div><div class="bin-track"><div class="bin-fill" id="bf2" style="height:0"></div></div><div class="bin-lbl">B2</div></div>
+          <div class="bin-col"><div style="font-family:var(--mono);font-size:9px;color:var(--t2)" id="bv3">—</div><div class="bin-track"><div class="bin-fill" id="bf3" style="height:0"></div></div><div class="bin-lbl">B3</div></div>
+          <div class="bin-col"><div style="font-family:var(--mono);font-size:9px;color:var(--t2)" id="bv4">—</div><div class="bin-track"><div class="bin-fill" id="bf4" style="height:0"></div></div><div class="bin-lbl">B4</div></div>
         </div>
       </div>
 
@@ -856,8 +856,14 @@ function renderBins(levels) {
   [1,2,3,4].forEach(i => {
     const d=levels[`bin${i}`]??999;
     const pct=Math.max(0,Math.min(100,(1-d/50)*100));
+    
+    // Update bar height and colour
     const el=document.getElementById(`bf${i}`);
     if(el){ el.style.height=`${pct}%`; el.style.background=pct>80?'var(--err)':pct>60?'var(--warn)':'var(--t0)'; }
+    
+    // Update text value
+    const val_el=document.getElementById(`bv${i}`);
+    if(val_el){ val_el.textContent=d<900?`${Math.floor(pct)}%`:'—'; val_el.style.color=pct>80?'var(--err)':'var(--t2)'; }
   });
 }
 
