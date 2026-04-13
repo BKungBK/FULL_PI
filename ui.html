@@ -631,19 +631,19 @@ table.mt tr:hover td{background:var(--s2)}
     <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap">
       <div>
         <div class="clabel" style="margin-bottom:5px">Capture presets</div>
-        <div class="preset-wrap">
-          <button class="btn btn-sm" onclick="svPreset('capture',45)">45°</button>
+        <div class="preset-wrap" id="cap-presets">
+          <button class="btn btn-sm" onclick="svPreset('capture',45)">Sweep</button>
           <button class="btn btn-sm" onclick="svPreset('capture',92)">Home</button>
-          <button class="btn btn-sm" onclick="svPreset('capture',120)">120°</button>
+          <button class="btn btn-sm" onclick="svPreset('capture',120)">Photo</button>
         </div>
       </div>
       <div>
         <div class="clabel" style="margin-bottom:5px">Sort presets</div>
-        <div class="preset-wrap">
-          <button class="btn btn-sm btn-m"  onclick="svPreset('sort',67)" >67° Metal</button>
-          <button class="btn btn-sm"        onclick="svPreset('sort',92)" >Home</button>
-          <button class="btn btn-sm btn-p"  onclick="svPreset('sort',112)">112° Plastic</button>
-          <button class="btn btn-sm btn-g"  onclick="svPreset('sort',157)">157° Glass</button>
+        <div class="preset-wrap" id="srt-presets">
+          <button class="btn btn-sm" style="color:var(--cm)" onclick="svPreset('sort',45)">M</button>
+          <button class="btn btn-sm" style="color:var(--cp)" onclick="svPreset('sort',110)">P</button>
+          <button class="btn btn-sm" style="color:var(--cg)" onclick="svPreset('sort',150)">G</button>
+          <button class="btn btn-sm" style="color:var(--t2)" onclick="svPreset('sort',92)">H</button>
         </div>
       </div>
     </div>
@@ -783,6 +783,39 @@ let snap = {};
 let ws   = null;
 let wsRetry = 1000;
 let charts = {};
+let SYS_CFG = null;
+
+async function loadConfig() {
+  const r = await api('GET', '/api/config');
+  if (r.ok && r.data && r.data.data) {
+    SYS_CFG = r.data.data;
+    
+    // Update Capture Slider & Presets
+    const capSlider = document.getElementById('sv-cap');
+    if (capSlider && capSlider.value === "92") { // Only init if it's default
+        capSlider.value = SYS_CFG.CAP_HOME;
+        document.getElementById('sv-cap-v').textContent = SYS_CFG.CAP_HOME + '°';
+    }
+    document.getElementById('cap-presets').innerHTML = `
+      <button class="btn btn-sm" onclick="svPreset('capture',${SYS_CFG.SWEEP})">Sweep(${SYS_CFG.SWEEP}°)</button>
+      <button class="btn btn-sm" onclick="svPreset('capture',${SYS_CFG.CAP_HOME})">Home(${SYS_CFG.CAP_HOME}°)</button>
+      <button class="btn btn-sm" onclick="svPreset('capture',${SYS_CFG.PHOTO})">Photo(${SYS_CFG.PHOTO}°)</button>
+    `;
+    
+    // Update Sort Slider & Presets
+    const srtSlider = document.getElementById('sv-srt');
+    if (srtSlider && srtSlider.value === "92") { 
+        srtSlider.value = SYS_CFG.SORT_HOME;
+        document.getElementById('sv-srt-v').textContent = SYS_CFG.SORT_HOME + '°';
+    }
+    document.getElementById('srt-presets').innerHTML = `
+      <button class="btn btn-sm" style="color:var(--cm)" onclick="svPreset('sort',${SYS_CFG.METAL})">M(${SYS_CFG.METAL}°)</button>
+      <button class="btn btn-sm" style="color:var(--cp)" onclick="svPreset('sort',${SYS_CFG.PLASTIC})">P(${SYS_CFG.PLASTIC}°)</button>
+      <button class="btn btn-sm" style="color:var(--cg)" onclick="svPreset('sort',${SYS_CFG.GLASS})">G(${SYS_CFG.GLASS}°)</button>
+      <button class="btn btn-sm" style="color:var(--t2)" onclick="svPreset('sort',${SYS_CFG.SORT_HOME})">H(${SYS_CFG.SORT_HOME}°)</button>
+    `;
+  }
+}
 
 /* ── state cache ──────────────────────────────────────────── */
 const roiSt = { cx:320, cy:240, size:320, picking:false, hx:-1, hy:-1 };
@@ -1258,9 +1291,9 @@ function applyThresh(){
   }); toast('Thresholds applied',true);
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════
    ANALYTICS
-═══════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════ */
 const CD={
   color:'#fff',
   plugins:{
@@ -1477,11 +1510,12 @@ function toast(msg,ok=true){
    INIT
 ═══════════════════════════════════════════════════════════ */
 // startCam() is called automatically from ws.onopen.
-// Also attempt immediately in case the server is already up (page reload).
-connect();
-api('GET','/api/full-snapshot').then(r=>{ if(r.ok){ snap=r.data; renderSnap(); startCam(); } });
-// Fallback: if full-snapshot never resolves, still try to show the stream
-setTimeout(()=>{ if(!document.getElementById('cam-img').src) startCam(); },1500);
+loadConfig().then(() => {
+  connect();
+  api('GET','/api/full-snapshot').then(r=>{ if(r.ok){ snap=r.data; renderSnap(); startCam(); } });
+  // Fallback: if full-snapshot never resolves, still try to show the stream
+  setTimeout(()=>{ if(!document.getElementById('cam-img').src) startCam(); },1500);
+});
 </script>
 </body>
 </html>

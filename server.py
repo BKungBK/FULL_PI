@@ -509,6 +509,23 @@ async def reset_performance() -> JSONResponse:
     return JSONResponse({"success": True})
 
 
+@app.get("/api/config")
+async def get_config() -> JSONResponse:
+    try:
+        from main import Config
+        return JSONResponse({"success": True, "data": {
+            "CAP_HOME": getattr(Config, "CAP_HOME_ANGLE", 92),
+            "SORT_HOME": getattr(Config, "SORT_HOME_ANGLE", 92),
+            "PHOTO": getattr(Config, "PHOTO_ANGLE", 120),
+            "SWEEP": getattr(Config, "SWEEP_ANGLE", 45),
+            "PLASTIC": getattr(Config, "PLASTIC_ANGLE", 112),
+            "GLASS": getattr(Config, "GLASS_ANGLE", 157),
+            "METAL": getattr(Config, "METAL_ANGLE", 67),
+        }})
+    except Exception as e:
+        return JSONResponse({"success": False, "detail": str(e)})
+
+
 @app.get("/api/export/csv")
 async def export_csv() -> Response:
     path = system_state.export_csv()
