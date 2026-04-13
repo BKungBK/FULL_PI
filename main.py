@@ -593,12 +593,35 @@ def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
 
     x1, y1, x2, y2 = bbox
 
-    # 2. Crop
-    crop = frame[y1:y2, x1:x2]
+    # 2. Convert rectangular bbox to a SQUARE crop to prevent aspect-ratio distortion
+    #    This ensures inference perfectly matches the 96x96 squared dataset training images.
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    w = x2 - x1
+    h = y2 - y1
+    
+    # Use max dimension + 20% margin 
+    sq_size = int(max(w, h) * 1.2)
+    half = sq_size // 2
+
+    sq_x1 = max(0, cx - half)
+    sq_y1 = max(0, cy - half)
+    sq_x2 = min(frame.shape[1], cx + half)
+    sq_y2 = min(frame.shape[0], cy + half)
+
+    crop = frame[sq_y1:sq_y2, sq_x1:sq_x2]
     if crop.size == 0:
         return "reject", 0.0
 
-    # 3. Classify
+    # If crop hit the frame edges it might not be perfectly square, so we pad it with black
+    crop_h, crop_w = crop.shape[:2]
+    if crop_h != crop_w:
+        max_side = max(crop_h, crop_w)
+        pad_bottom = max_side - crop_h
+        pad_right = max_side - crop_w
+        crop = cv2.copyMakeBorder(crop, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+    # 3. Classify (CLAHE and Resize already happen inside here)
     return run_classifier(crop)
 
 
