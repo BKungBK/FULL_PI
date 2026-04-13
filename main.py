@@ -534,50 +534,51 @@ class HardwareController:
         self,
         pin: int,
         target: float,
-        speed: float = 30.0,  # Slow default speed in degrees per second
+        speed: float = 30.0,
     ) -> None:
-        """Interpolate servo using an Ease-In-Out Sine curve.
-        (Perfectly smooth start and stop, eliminating jerks).
-        """
+        """Interpolate servo with extreme resolution (8ms steps)."""
         start = self._last_angle.get(pin, Config.CENTER_ANGLE)
         distance = abs(target - start)
         
-        # Avoid moving if already at target
-        if distance < 1.0:
+        if distance < 0.5:
             self.move_servo(pin, target)
             return
 
-        # Calculate exact duration so speed constraint is perfectly respected
         duration = distance / speed
-        duration = max(0.2, duration) # Minimum 0.2s for tiny micro-adjustments
+        duration = max(0.12, duration)
 
-        # Calculate high-resolution steps (e.g. updating every ~20ms)
-        steps = int(duration / 0.02)
+        # Ultra-high res: 125 updates per second (8ms)
+        # This is beyond the 50Hz PWM cycle but ensures the internal 
+        # RPi hardware PWM buffer is always fed with the freshest target.
+        steps = int(duration / 0.008)
+        steps = max(12, steps) 
         step_delay = duration / steps
             
         for i in range(1, steps + 1):
             t = i / steps
             
-            # Ease-In-Out Sine Formula (S-Curve)
-            # Starts smoothly from zero, reaches max speed in middle, stops smoothly
+            # Ease-In-Out Sine for smoothness
             eased_t = 0.5 * (1.0 - math.cos(math.pi * t))
                 
             current = start + (target - start) * eased_t
             self.move_servo(pin, current)
             time.sleep(step_delay)
 
-    def idle_servos(self) -> None:
-        """Stop PWM signal to reduce servo heat and prevent jitter."""
+    def idle_servos(self, force: bool = False) -> None:
+        """Stop PWM signal to reduce servo heat. 
+        Only idles if near Home (92°) unless force=True to prevent dropping heavy loads.
+        """
         for pin in (Config.SERVO1_PIN, Config.SERVO2_PIN):
-            try:
-                # Standard way to cut PWM on RPi with lgpio
-                lgpio.tx_servo(self._h, pin, 0)
-            except Exception:
+            angle = self._last_angle.get(pin, Config.CENTER_ANGLE)
+            # Safe to idle ONLY if at Home (92) or Forced
+            if force or abs(angle - Config.CENTER_ANGLE) < 2.0:
                 try:
-                    # Fallback: keep frequency but 0% duty
-                    lgpio.tx_pwm(self._h, pin, 50, 0)
-                except Exception as exc:
-                    logger.debug("idle_servos pin %d: %s", pin, exc)
+                    lgpio.tx_servo(self._h, pin, 0)
+                except Exception:
+                    try:
+                        lgpio.tx_pwm(self._h, pin, 50, 0)
+                    except Exception as exc:
+                        logger.debug("idle_servos pin %d: %s", pin, exc)
 
     # ── ultrasonic ────────────────────────────────────────────────────
 
@@ -864,17 +865,18 @@ class SmartBinEngine:
             name  = cmd.get("name", "")
             angle = int(cmd.get("angle", Config.CENTER_ANGLE))
             if name == "capture":
-                # Very slow manual rotation (15 deg/sec) controlled via Web UI slider
-                hw.smooth_move(Config.SERVO1_PIN, angle, speed=15.0)
+                # Increase speed to 25 deg/sec for smoother movement
+                hw.smooth_move(Config.SERVO1_PIN, angle, speed=25.0)
                 time.sleep(0.3)
                 hw.idle_servos()
             elif name == "sort":
-                hw.smooth_move(Config.SERVO2_PIN, angle, speed=15.0)
+                hw.smooth_move(Config.SERVO2_PIN, angle, speed=25.0)
                 time.sleep(0.3)
                 hw.idle_servos()
             elif name == "all":
-                hw.smooth_move(Config.SERVO1_PIN, angle, speed=15.0)
-                hw.smooth_move(Config.SERVO2_PIN, angle, speed=15.0)
+                # Manual 'all' command (e.g. from Home button)
+                hw.smooth_move(Config.SERVO1_PIN, angle, speed=35.0)
+                hw.smooth_move(Config.SERVO2_PIN, angle, speed=35.0)
                 time.sleep(0.3)
                 hw.idle_servos()
         elif action == "flash":
@@ -897,15 +899,16 @@ class SmartBinEngine:
             cls = cmd.get("class", "reject")
             logger.info("Manual sort triggered: %s", cls)
             target = self._label_to_angle(cls)
-            hw.smooth_move(Config.SERVO2_PIN, target, speed=25.0)
+            # Keep signal LOCKED during move for torque
+            hw.smooth_move(Config.SERVO2_PIN, target, speed=35.0, update_rate=0.008) 
             time.sleep(0.3)
-            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
+            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=45.0, update_rate=0.008)
             time.sleep(0.5)
-            # Reset both back to Home correctly
-            hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=30.0)
-            hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, speed=25.0)
+            # Reset both back to Home
+            hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=45.0, update_rate=0.008)
+            hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, speed=35.0, update_rate=0.008)
             time.sleep(0.2)
-            hw.idle_servos()
+            hw.idle_servos() # Signal cuts only at Home to save heat
             if system_state:
                 system_state.add_sort_event(cls, 1.0, 0.0)
 
@@ -925,18 +928,10 @@ class SmartBinEngine:
         return None
 
     def _process_detection(self) -> None:
-        """Execute the full detection pipeline according to timing spec.
-        
-        Matches dataset_tool.py capture pipeline for reliable inference.
-        """
+        """Execute the full detection pipeline with guaranteed Reset."""
         t0 = time.monotonic()
         hw = self._hw
         assert hw
-
-        # t=0.00 — Pre-emptive: tilt capture arm to photo position
-        hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=30.0)
-        logger.info("[t=%.3f] Pre-emptive Servo1 → %d°",
-                    time.monotonic() - t0, Config.PHOTO_ANGLE)
 
         # Flash ON
         self._send_flash(on=True)
@@ -946,51 +941,37 @@ class SmartBinEngine:
         
         # Grab reliable high-res frame via HTTP
         frame = self._capture_http_frame()
-        self._send_flash(on=False) # Turn off immediately after capture
+        self._send_flash(on=False) 
         
         if frame is None:
             logger.warning("Failed to capture HTTP frame — aborting")
-            hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=30.0)
+            hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=45.0)
             hw.idle_servos()
             return
 
-        # Inference on single reliable frame
+        # Inference
         start_ms = time.time() * 1000.0
         label, conf = classify_single_frame(frame)
         elapsed_ms = (time.time() * 1000.0) - start_ms
-        
-        logger.info(
-            "[t=%.3f] Result: %s (conf=%.2f, %.1f ms)",
-            time.monotonic() - t0, label, conf, elapsed_ms,
-        )
-
         self._record_sort(label, conf, elapsed_ms)
 
-        # Return Servo1 to center before bin rotation
-        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=30.0)
+        # Move Servo1 back to center (Home) - locking signal
+        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=45.0)
 
         # t~1.20 — Sort command: Servo2 → target bin angle
         target_angle = self._label_to_angle(label)
-        hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=25.0)
-        logger.info(
-            "[t=%.3f] Sort: Servo2 → %d° (%s)",
-            time.monotonic() - t0, target_angle, label,
-        )
+        hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=35.0)
 
-        # t~1.50 — Drop: Servo1 tips waste
-        time.sleep(0.2) # Wait for Servo2 to finish
-        hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
-        logger.info(
-            "[t=%.3f] Drop: Servo1 → %d°",
-            time.monotonic() - t0, Config.SWEEP_ANGLE,
-        )
+        # t~1.50 — Drop: Servo1 tips waste (Strong move)
+        time.sleep(0.2) 
+        hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=50.0)
 
         # t~2.00 — Reset: both servos to Home / Center
-        time.sleep(0.5) # Wait for dump
-        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=30.0)
-        hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, speed=30.0)
+        time.sleep(0.5) 
+        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=40.0)
+        hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, speed=40.0)
         time.sleep(0.2)
-        hw.idle_servos()
+        hw.idle_servos(force=True) # Final clean idle at Home
         logger.info("[t=%.3f] Reset complete", time.monotonic() - t0)
 
     # ── helpers ───────────────────────────────────────────────────────
