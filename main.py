@@ -933,46 +933,50 @@ class SmartBinEngine:
         hw = self._hw
         assert hw
 
-        # Flash ON
-        self._send_flash(on=True)
+        try:
+            # t=0.00 — Tilt capture arm to photo position (120°)
+            hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=35.0)
+            
+            # Flash + Capture
+            self._send_flash(on=True)
+            time.sleep(0.5) 
+            frame = self._capture_http_frame()
+            self._send_flash(on=False) 
+            
+            if frame is None:
+                logger.warning("Failed capture — aborting pipeline")
+                return
 
-        # t=0.80 — Wait for ESP32 auto-exposure to adapt to flash
-        time.sleep(max(0.0, 0.80 - (time.monotonic() - t0)))
-        
-        # Grab reliable high-res frame via HTTP
-        frame = self._capture_http_frame()
-        self._send_flash(on=False) 
-        
-        if frame is None:
-            logger.warning("Failed to capture HTTP frame — aborting")
+            # Inference
+            start_ms = time.time() * 1000.0
+            label, conf = classify_single_frame(frame)
+            elapsed_ms = (time.time() * 1000.0) - start_ms
+            
+            logger.info("[t=%.3f] Result: %s (conf=%.2f)", 
+                        time.monotonic() - t0, label, conf)
+            self._record_sort(label, conf, elapsed_ms)
+
+            # Stage 1: Reset Arm to Neutral
+            hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=40.0)
+
+            # Stage 2: Rotate Bin (Servo 2)
+            target_angle = self._label_to_angle(label)
+            hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=40.0)
+
+            # Stage 3: Drop (Servo 1)
+            time.sleep(0.2) 
+            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=55.0)
+            time.sleep(0.6)
+
+        except Exception as exc:
+            logger.error("Detection pipeline crashed: %s", exc)
+        finally:
+            # CRITICAL: Always return both servos to Home / Center
             hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=45.0)
-            hw.idle_servos()
-            return
-
-        # Inference
-        start_ms = time.time() * 1000.0
-        label, conf = classify_single_frame(frame)
-        elapsed_ms = (time.time() * 1000.0) - start_ms
-        self._record_sort(label, conf, elapsed_ms)
-
-        # Move Servo1 back to center (Home) - locking signal
-        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=45.0)
-
-        # t~1.20 — Sort command: Servo2 → target bin angle
-        target_angle = self._label_to_angle(label)
-        hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=35.0)
-
-        # t~1.50 — Drop: Servo1 tips waste (Strong move)
-        time.sleep(0.2) 
-        hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=50.0)
-
-        # t~2.00 — Reset: both servos to Home / Center
-        time.sleep(0.5) 
-        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, speed=40.0)
-        hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, speed=40.0)
-        time.sleep(0.2)
-        hw.idle_servos(force=True) # Final clean idle at Home
-        logger.info("[t=%.3f] Reset complete", time.monotonic() - t0)
+            hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, speed=45.0)
+            time.sleep(0.2)
+            hw.idle_servos(force=True)
+            logger.info("[t=%.3f] Pipeline finished & Reset", time.monotonic() - t0)
 
     # ── helpers ───────────────────────────────────────────────────────
 
