@@ -124,13 +124,13 @@ void setup() {
   // ── Sensor tuning for ML-quality images ─────────────────────
   s->set_contrast(s, 2);        // Max contrast → sharper details
   s->set_saturation(s, -2);     // Reduce colour noise
-  s->set_brightness(s, 1);      // Slightly brighter
+  s->set_brightness(s, -1);      // Slightly brighter
   s->set_whitebal(s, 1);        // Auto white balance ON
   s->set_awb_gain(s, 1);        // AWB gain ON
-  s->set_aec2(s, 1);            // Auto exposure (DSP) ON
+  s->set_aec2(s, 0);            // Auto exposure (DSP) ON
   s->set_bpc(s, 1);             // Black pixel correction ON
   s->set_wpc(s, 1);             // White pixel correction ON
-  s->set_raw_gma(s, 1);         // Gamma correction ON
+  s->set_raw_gma(s, 0);         // Gamma correction ON
   s->set_lenc(s, 1);            // Lens correction ON
   s->set_gainceiling(s, (gainceiling_t)GAINCEILING_4X);  // Limit gain → less noise
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 # ── stdlib ────────────────────────────────────────────────────────────
 import logging
+import math
 import os
 import signal
 import socket
@@ -88,21 +89,15 @@ class Config:
     FLASH_INTENSITY_ON: int = 200
     FLASH_INTENSITY_OFF: int = 0
 
-    # ── YOLO NCNN Stage-1 ─────────────────────────────────────────────
-    YOLO_MODEL_DIR: str = "best_ncnn_model"
-    YOLO_INPUT_SIZE: int = 320
-    YOLO_CONF_THRESHOLD: float = 0.40
-    YOLO_IOU_THRESHOLD: float = 0.45
-
-    # ── TFLite Stage-2 Classifier ──────────────────────────────────────
-    CLASSIFIER_MODEL_PATH: str = "stage2_efficientnet_int8.tflite"
+    # ── Teachable Machine Classifier ───────────────────────────────────
+    CLASSIFIER_MODEL_PATH: str = "model.tflite"
+    CLASSIFIER_LABELS_PATH: str = "labels.txt"
     TFLITE_THREADS: int = 4
     VOTE_FRAMES: int = 5
-    # EfficientNet output indices: 0=metal, 1=plastic, 2=glass, 3=reject
-    # (YOLO class names AluCan/Glass/HDPEM/PET are for detection only — not used for sorting)
-    CLASS_NAMES: Tuple[str, ...] = ("metal", "plastic", "glass", "reject")
+    # Class labels will be loaded dynamically from labels.txt.
+    CLASS_NAMES: List[str] = field(default_factory=list)
 
-    # ── ROI window (over 640×480 ESP32 stream) ─────────────────────────
+    # ── ROI window (Ignored in TM mode, but kept for compatibility) ────
     ROI_ENABLED: bool = True
     ROI_CENTER_X: int = 320
     ROI_CENTER_Y: int = 240
@@ -153,7 +148,6 @@ class Config:
 @dataclass
 class GlobalState:
     """Mutable singletons shared by inference functions."""
-    yolo_detector: Optional["NcnnYoloDetector"] = None
     classifier_interpreter: Optional[tflite.Interpreter] = None
     last_roi_coords: Optional[Tuple[int, int, int, int]] = None
 
@@ -198,65 +192,6 @@ def crop_roi(frame: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
 # 5. MODEL LOADING
 # =====================================================================
 
-@dataclass(frozen=True)
-class LetterboxInfo:
-    scale: float
-    pad_left: int
-    pad_top: int
-    orig_h: int
-    orig_w: int
-
-
-class NcnnYoloDetector:
-    """NCNN-backed YOLO detector that returns a single best bbox per frame."""
-
-    INPUT_NAME = "in0"
-    OUTPUT_NAME = "out0"
-
-    def __init__(self, model_dir: str, input_size: int, conf_threshold: float, num_threads: int):
-        model_path = Path(model_dir)
-        param_path = model_path / "model.ncnn.param"
-        bin_path = model_path / "model.ncnn.bin"
-
-        if not param_path.exists() or not bin_path.exists():
-            raise FileNotFoundError(
-                f"NCNN model files not found in {model_dir} "
-                f"(expected {param_path.name} and {bin_path.name})"
-            )
-
-        self.input_size = input_size
-        self.conf_threshold = conf_threshold
-        self.net = ncnn.Net()
-
-        if hasattr(self.net, "opt"):
-            if hasattr(self.net.opt, "use_vulkan_compute"):
-                self.net.opt.use_vulkan_compute = False
-            if hasattr(self.net.opt, "num_threads"):
-                self.net.opt.num_threads = num_threads
-
-        self.net.load_param(str(param_path))
-        self.net.load_model(str(bin_path))
-
-    def detect(self, frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
-        """Run YOLO NCNN inference and return the best bbox in frame coordinates."""
-        input_tensor, letterbox = preprocess_yolo(frame)
-
-        # NOTE: ncnn.Extractor may not support context manager in all versions.
-        # Use explicit create + call pattern for maximum compatibility.
-        extractor = self.net.create_extractor()
-        extractor.input(self.INPUT_NAME, ncnn.Mat(input_tensor).clone())
-        ret, output = extractor.extract(self.OUTPUT_NAME)
-
-        if ret != 0:
-            raise RuntimeError(f"NCNN extractor failed with code {ret}")
-
-        return postprocess_yolo(
-            np.array(output, dtype=np.float32),
-            self.conf_threshold,
-            Config.YOLO_IOU_THRESHOLD,
-            letterbox,
-        )
-
 
 def load_tflite_model(model_path: str) -> tflite.Interpreter:
     """Load a TFLite model and use XNNPACK when the delegate is available."""
@@ -284,25 +219,15 @@ def load_tflite_model(model_path: str) -> tflite.Interpreter:
 
 
 def initialize_models() -> None:
-    """Load YOLO NCNN detector and TFLite classifier.
-
-    CLASS_NAMES = ("metal", "plastic", "glass", "reject") is hardcoded in Config.
-    No external labels file is required — EfficientNet output indices map directly:
-        0 → metal  |  1 → plastic  |  2 → glass  |  3 → reject
-    """
-    logger.info("Class names: %s", Config.CLASS_NAMES)
-
-    logger.info("Loading YOLO NCNN detector from %s...", Config.YOLO_MODEL_DIR)
-    g_state.yolo_detector = NcnnYoloDetector(
-        model_dir=Config.YOLO_MODEL_DIR,
-        input_size=Config.YOLO_INPUT_SIZE,
-        conf_threshold=Config.YOLO_CONF_THRESHOLD,
-        num_threads=Config.TFLITE_THREADS,
-    )
-    logger.info(
-        "YOLO NCNN detector loaded. Input size: %dx%d",
-        Config.YOLO_INPUT_SIZE, Config.YOLO_INPUT_SIZE,
-    )
+    """Load Teachable Machine TFLite classifier and labels.txt."""
+    try:
+        with open(Config.CLASSIFIER_LABELS_PATH, 'r') as f:
+            Config.CLASS_NAMES = f.read().splitlines()
+        logger.info("Class names loaded: %s", Config.CLASS_NAMES)
+    except Exception as e:
+        logger.error(f"Error loading labels: {e}")
+        # Fallback to defaults
+        Config.CLASS_NAMES = ["plastic", "metal", "glass"]
 
     logger.info("Loading classifier from %s...", Config.CLASSIFIER_MODEL_PATH)
     g_state.classifier_interpreter = load_tflite_model(Config.CLASSIFIER_MODEL_PATH)
@@ -356,273 +281,66 @@ def preprocess_yolo(frame: np.ndarray) -> Tuple[np.ndarray, LetterboxInfo]:
     )
 
 
-def normalize_detector_output(output: np.ndarray) -> np.ndarray:
-    """
-    Normalize detector output to [num_predictions, num_channels].
-
-    Supports both legacy TFLite-style channel-first output and NCNN output,
-    which may be either [num_predictions, channels] or [channels, num_predictions].
-    """
-    predictions = np.asarray(output)
-    predictions = np.squeeze(predictions)
-
-    if predictions.ndim != 2:
-        raise ValueError(f"Unexpected detector output shape: {predictions.shape}")
-
-    if predictions.shape[1] <= 32:
-        normalized = predictions
-    elif predictions.shape[0] <= 32:
-        normalized = predictions.T
-    else:
-        normalized = predictions if predictions.shape[1] < predictions.shape[0] else predictions.T
-
-    if normalized.shape[1] < 5:
-        raise ValueError(f"Detector output has too few channels: {normalized.shape}")
-
-    return normalized.astype(np.float32, copy=False)
+def prepare_image(img: np.ndarray) -> np.ndarray:
+    """Crop center square and resize specifically for Teachable Machine models."""
+    h_img, w_img = img.shape[:2]
+    size = min(h_img, w_img)
+    x = (w_img - size) // 2
+    y = (h_img - size) // 2
+    
+    square = img[y : y + size, x : x + size]
+    resized240 = cv2.resize(square, (240, 240))
+    margin = 8
+    roi224 = resized240[margin : 240 - margin, margin : 240 - margin]
+    return roi224
 
 
-def postprocess_yolo(
-    output: np.ndarray,
-    conf_thresh: float,
-    iou_thresh: float,
-    letterbox: LetterboxInfo,
-) -> Optional[Tuple[int, int, int, int]]:
-    """
-    Parse YOLO output and return best detection bbox (x1, y1, x2, y2).
-    Simplified for single-object waste detection.
-    """
-    del iou_thresh  # Reserved for future NMS improvements; best-score pick is enough here.
+def predict(img: np.ndarray) -> Tuple[str, float]:
+    """Run Teachable Machine float32 standard inference."""
+    try:
+        interpreter = g_state.classifier_interpreter
+        if interpreter is None:
+            raise RuntimeError("Classifier is not initialized")
+            
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
 
-    predictions = normalize_detector_output(output)
-    boxes = predictions[:, :4]
-    class_scores = predictions[:, 4:]
-    scores = np.max(class_scores, axis=1)
-
-    keep = scores > conf_thresh
-    if not np.any(keep):
-        return None
-
-    filtered_boxes = boxes[keep]
-    filtered_scores = scores[keep]
-    best_box = filtered_boxes[int(np.argmax(filtered_scores))]
-
-    cx, cy, bw, bh = [float(v) for v in best_box]
-    x1 = cx - bw / 2.0
-    y1 = cy - bh / 2.0
-    x2 = cx + bw / 2.0
-    y2 = cy + bh / 2.0
-
-    x1 = (x1 - letterbox.pad_left) / letterbox.scale
-    y1 = (y1 - letterbox.pad_top) / letterbox.scale
-    x2 = (x2 - letterbox.pad_left) / letterbox.scale
-    y2 = (y2 - letterbox.pad_top) / letterbox.scale
-
-    x1, y1 = max(0.0, x1), max(0.0, y1)
-    x2, y2 = min(float(letterbox.orig_w), x2), min(float(letterbox.orig_h), y2)
-
-    if x2 <= x1 or y2 <= y1:
-        return None
-
-    return (int(x1), int(y1), int(x2), int(y2))
-
-
-def run_yolo_detection(frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
-    """
-    Run YOLO detection on frame with ROI crop, return bbox or None.
-
-    The bbox is returned in original frame coordinates (not ROI coordinates).
-    """
-    # First, crop ROI from frame
-    roi_frame, roi_coords = crop_roi(frame)
-    g_state.last_roi_coords = roi_coords
-
-    detector = g_state.yolo_detector
-    if detector is None:
-        raise RuntimeError("YOLO detector is not initialized")
-
-    roi_bbox = detector.detect(roi_frame)
-
-    if roi_bbox is None:
-        return None
-
-    # Convert ROI-relative bbox to original frame coordinates
-    rx1, ry1, rx2, ry2 = roi_bbox
-    ox1, oy1, _, _ = roi_coords
-
-    frame_bbox = (
-        int(rx1 + ox1),
-        int(ry1 + oy1),
-        int(rx2 + ox1),
-        int(ry2 + oy1),
-    )
-
-    return frame_bbox
-
-
-def get_image_size_from_shape(shape: np.ndarray) -> Tuple[int, int]:
-    """Extract HxW from a TFLite input shape."""
-    dims = tuple(int(v) for v in shape)
-
-    if len(dims) == 4:
-        if dims[-1] == 3:
-            return dims[1], dims[2]
-        if dims[1] == 3:
-            return dims[2], dims[3]
-    elif len(dims) == 3:
-        if dims[-1] == 3:
-            return dims[0], dims[1]
-        if dims[0] == 3:
-            return dims[1], dims[2]
-
-    raise ValueError(f"Unsupported classifier input shape: {dims}")
-
-
-def _extract_quant_params(detail: dict) -> Tuple[float, int]:
-    """Extract quantization scale and zero_point from TFLite detail dict.
-
-    Supports both formats:
-    - Legacy: detail["quantization"] = (scale, zero_point)  # tuple
-    - Modern: detail["quantization_parameters"] = {"scales": [...], "zero_points": [...]}  # dict
-    """
-    # Try modern format first (tflite-runtime >= 2.5)
-    qparams = detail.get("quantization_parameters", {})
-    if isinstance(qparams, dict):
-        scales = qparams.get("scales", [])
-        zero_points = qparams.get("zero_points", [])
-        if len(scales) > 0 and float(scales[0]) != 0.0:
-            return float(scales[0]), int(zero_points[0]) if len(zero_points) > 0 else 0
-
-    # Fallback to legacy format
-    legacy = detail.get("quantization", (0.0, 0))
-    if isinstance(legacy, (list, tuple)) and len(legacy) >= 2:
-        return float(legacy[0]), int(legacy[1])
-
-    return 0.0, 0
-
-
-def quantize_input(input_data: np.ndarray, input_detail: dict) -> np.ndarray:
-    """Convert float32 [0,1] image data into the classifier's expected dtype."""
-    dtype = input_detail["dtype"]
-
-    if dtype == np.float32:
-        return input_data.astype(np.float32, copy=False)
-
-    if np.issubdtype(dtype, np.integer):
-        scale, zero_point = _extract_quant_params(input_detail)
-        if not scale:
-            raise ValueError("Quantized classifier input is missing quantization scale")
-        quantized = np.round(input_data / scale + zero_point)
-        limits = np.iinfo(dtype)
-        return np.clip(quantized, limits.min, limits.max).astype(dtype)
-
-    return input_data.astype(dtype, copy=False)
-
-
-def dequantize_output(output_data: np.ndarray, output_detail: dict) -> np.ndarray:
-    """Convert quantized classifier outputs back to float for scoring/logging."""
-    if np.issubdtype(output_data.dtype, np.integer):
-        scale, zero_point = _extract_quant_params(output_detail)
-        if scale:
-            return (output_data.astype(np.float32) - zero_point) * scale
-    return output_data.astype(np.float32, copy=False)
-
-
-def preprocess_classifier(crop: np.ndarray) -> np.ndarray:
-    """Preprocess cropped image for the classifier based on model metadata.
-
-    Applies CLAHE adaptive contrast to match training-data preprocessing.
-    """
-    interpreter = g_state.classifier_interpreter
-    if interpreter is None:
-        raise RuntimeError("Classifier is not initialized")
-
-    input_detail = interpreter.get_input_details()[0]
-    input_h, input_w = get_image_size_from_shape(input_detail["shape"])
-
-    # CLAHE — matches dataset_tool.py postprocess() for train/infer consistency
-    lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
-    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-    crop = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-    resized = cv2.resize(crop, (input_w, input_h), interpolation=cv2.INTER_AREA)
-    normalized = resized.astype(np.float32) / 255.0
-    input_data = np.expand_dims(normalized, axis=0)
-    return quantize_input(input_data, input_detail)
-
-
-def run_classifier(crop: np.ndarray) -> Tuple[str, float]:
-    """Run classifier on a cropped waste image."""
-    interpreter = g_state.classifier_interpreter
-    if interpreter is None:
-        raise RuntimeError("Classifier is not initialized")
-
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-
-    # Preprocess
-    input_data = preprocess_classifier(crop)
-
-    # Run inference
-    interpreter.set_tensor(input_details[0]["index"], input_data)
-    interpreter.invoke()
-
-    # Get predictions
-    output_data = interpreter.get_tensor(output_details[0]["index"])[0]
-    output_data = dequantize_output(output_data, output_details[0])
-
-    # Get top class
-    pred_idx = int(np.argmax(output_data))
-    confidence = float(output_data[pred_idx])
-    class_name = (
-        Config.CLASS_NAMES[pred_idx]
-        if pred_idx < len(Config.CLASS_NAMES)
-        else "reject"
-    )
-
-    return class_name, confidence
+        # ปรับให้ตรงกับขนาด input model ทั่วไป
+        img_resized = cv2.resize(img, (224, 224)) 
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+        
+        # Teachable Machine normalization
+        img_final = (img_rgb.astype(np.float32) / 127.5) - 1.0
+        img_final = np.expand_dims(img_final, 0)
+        
+        interpreter.set_tensor(input_details[0]['index'], img_final)
+        interpreter.invoke()
+        
+        output = interpreter.get_tensor(output_details[0]['index'])[0]
+        idx = int(np.argmax(output))
+        conf = float(output[idx])
+        
+        # reject คือน้อยกว่า 0.5 ทั้งหมด
+        if conf < 0.5:
+            return "reject", conf
+            
+        class_name = (
+            Config.CLASS_NAMES[idx]
+            if idx < len(Config.CLASS_NAMES)
+            else "reject"
+        )
+        return class_name, conf
+    except Exception as e:
+        logger.error("Predict error: %s", e)
+        return "reject", 0.0
 
 
 def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
-    """Full pipeline: detect + crop + classify one frame."""
-    # 1. Detect object
-    bbox = run_yolo_detection(frame)
-    if bbox is None:
-        return "reject", 0.0  # No object detected
-
-    x1, y1, x2, y2 = bbox
-
-    # 2. Convert rectangular bbox to a SQUARE crop to prevent aspect-ratio distortion
-    #    This ensures inference perfectly matches the 224x224 squared dataset training images.
-    cx = (x1 + x2) // 2
-    cy = (y1 + y2) // 2
-    w = x2 - x1
-    h = y2 - y1
-    
-    # Use max dimension + 20% margin 
-    sq_size = int(max(w, h) * 1.2)
-    half = sq_size // 2
-
-    sq_x1 = max(0, cx - half)
-    sq_y1 = max(0, cy - half)
-    sq_x2 = min(frame.shape[1], cx + half)
-    sq_y2 = min(frame.shape[0], cy + half)
-
-    crop = frame[sq_y1:sq_y2, sq_x1:sq_x2]
-    if crop.size == 0:
-        return "reject", 0.0
-
-    # If crop hit the frame edges it might not be perfectly square, so we pad it with black
-    crop_h, crop_w = crop.shape[:2]
-    if crop_h != crop_w:
-        max_side = max(crop_h, crop_w)
-        pad_bottom = max_side - crop_h
-        pad_right = max_side - crop_w
-        crop = cv2.copyMakeBorder(crop, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-
-    # 3. Classify (CLAHE and Resize already happen inside here)
-    return run_classifier(crop)
+    """Full pipeline: extract ROI + prepare image + classify one frame."""
+    roi_frame, roi_coords = crop_roi(frame)
+    g_state.last_roi_coords = roi_coords
+    roi224 = prepare_image(roi_frame)
+    return predict(roi224)
 
 
 def classify_with_voting(frames: List[np.ndarray]) -> Tuple[str, float, float]:
@@ -780,13 +498,29 @@ class HardwareController:
         self,
         pin: int,
         target: float,
-        steps: int = 20,
-        delay: float = 0.02,
+        steps: int = 0,   # 0 means auto-calculate based on distance
+        delay: float = 0.015,
     ) -> None:
-        """Linearly interpolate servo from current → target."""
+        """Interpolate servo using an Ease-In-Out Sine curve for dynamic movement.
+        Steps are auto-calculated based on distance to prevent stuttering on tiny moves.
+        """
         start = self._last_angle.get(pin, Config.CENTER_ANGLE)
-        for i in range(steps + 1):
-            current = start + (target - start) * (i / steps)
+        distance = abs(target - start)
+        
+        # Avoid moving if already at target to prevent jitter
+        if distance < 1.0:
+            self.move_servo(pin, target)
+            return
+
+        # Auto-calculate steps (e.g. ~2 degrees per step), clamp between 8 and 40 steps
+        if steps == 0:
+            steps = int(max(8, min(40, distance / 2.0)))
+            
+        for i in range(1, steps + 1):
+            t = i / steps
+            # ServoEasing's exact EaseInOutSine formula: = 0.5 * (1 - cos(pi * t))
+            eased_t = 0.5 * (1.0 - math.cos(math.pi * t))
+            current = start + (target - start) * eased_t
             self.move_servo(pin, current)
             time.sleep(delay)
 
@@ -971,6 +705,7 @@ class SmartBinEngine:
 
         state = DetectionState.IDLE
         last_cooldown_end: float = 0.0
+        hand_present_start_time: float = 0.0
 
         try:
             while self._running:
@@ -1019,10 +754,18 @@ class SmartBinEngine:
 
                 if not is_full and cooldown_ok and state == DetectionState.IDLE:
                     if dist_main < Config.DETECT_DISTANCE_CM:
-                        state = DetectionState.HAND_PRESENT
-                        logger.info("Hand detected (dist=%.1f cm)", dist_main)
+                        if hand_present_start_time == 0.0:
+                            hand_present_start_time = now
+                        elif (now - hand_present_start_time) >= 0.5:
+                            state = DetectionState.HAND_PRESENT
+                            logger.info("Hand detected robustly (present >= 0.5s)")
+                    else:
+                        hand_present_start_time = 0.0
 
                 elif state == DetectionState.HAND_PRESENT:
+                    # Clear timer once we move out of IDLE
+                    hand_present_start_time = 0.0
+                    
                     if dist_main > Config.HAND_WITHDRAWN_DISTANCE_CM:
                         state = DetectionState.PROCESSING
                         logger.info("Hand withdrawn — starting pipeline")
@@ -1163,10 +906,7 @@ class SmartBinEngine:
 
     @staticmethod
     def _label_to_angle(label: str) -> int:
-        """Map NCNN class name → Servo2 angle.
-
-        Labels (from labels.txt): AluCan, Glass, HDPEM, PET
-        """
+        """Map predicted class name → Servo2 angle."""
         ll = label.lower()
         if "reject" in ll:
             return Config.CENTER_ANGLE   # 92° — stay home, drop in default bin
