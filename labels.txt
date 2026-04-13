@@ -1,4 +1,3 @@
-AluCan
-Glass
-HDPEM
-PET
+0 Plastic
+1 Metal
+2 Glass
