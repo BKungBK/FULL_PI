@@ -188,6 +188,7 @@ class SharedState:
                 s.sort_times_ms.pop(0)
 
             event: dict = {
+                "id":         f"ev_{int(time.time()*100)}",
                 "time":       s.last_sort_time,
                 "label":      label,
                 "confidence": round(confidence, 3),
@@ -207,23 +208,30 @@ class SharedState:
             except Exception:
                 pass
 
-    def confirm_sort(self, predicted: str, actual: str) -> None:
+    def confirm_sort(self, event_id: str, actual: str) -> None:
         """
-        Record user confirmation of the last sort result.
+        Record user confirmation of a specific sort result via ID.
         Updates confusion_matrix[actual][predicted].
         """
         with self._lock:
             s = self._state
+            
+            target_event = None
+            for ev in reversed(s.sort_history):
+                if ev.get("id") == event_id:
+                    target_event = ev
+                    break
+            
+            if not target_event or target_event.get("correct") is not None:
+                return
+            
+            predicted = target_event.get("label", "")
             cm = s.confusion_matrix
             if actual in cm and predicted in cm[actual]:
                 cm[actual][predicted] += 1
 
-            # Annotate the most recent un-confirmed history entry
-            for event in reversed(s.sort_history):
-                if event.get("correct") is None:
-                    event["correct"] = (predicted == actual)
-                    event["actual"]  = actual
-                    break
+            target_event["correct"] = (predicted == actual)
+            target_event["actual"]  = actual
 
     # ──────────────────────────────────────────────────────────────────
     # COMMAND QUEUE (UI/Server → Engine)

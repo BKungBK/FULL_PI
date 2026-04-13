@@ -60,6 +60,7 @@ async def app_lifespan(app: FastAPI):
     global _server_loop
     _server_loop = asyncio.get_running_loop()
     asyncio.create_task(_bin_push_loop())
+    _start_engine_thread()
     yield
     # Shutdown tasks (if any)
 
@@ -404,6 +405,7 @@ class ServoBody(BaseModel):
 
 
 class ConfirmBody(BaseModel):
+    event_id: str
     actual_class: str
 
 
@@ -483,22 +485,27 @@ async def update_config(body: dict) -> JSONResponse:
 
 @app.post("/api/performance/confirm")
 async def confirm_sort(body: ConfirmBody) -> JSONResponse:
-    predicted = system_state.snapshot().get("last_predicted", "")
-    if not predicted:
-        return JSONResponse({"success": False, "detail": "No pending prediction"})
-    system_state.confirm_sort(predicted, body.actual_class)
+    if not body.event_id:
+        return JSONResponse({"success": False, "detail": "Missing event ID"})
+    system_state.confirm_sort(body.event_id, body.actual_class)
+    if _server_loop is not None:
+        asyncio.run_coroutine_threadsafe(_broadcast({"type": "update_analytics"}), _server_loop)
     return JSONResponse({"success": True})
 
 
 @app.post("/api/stats/reset")
 async def reset_stats() -> JSONResponse:
     system_state.reset_stats()
+    if _server_loop is not None:
+        asyncio.run_coroutine_threadsafe(_broadcast({"type": "update_analytics"}), _server_loop)
     return JSONResponse({"success": True})
 
 
 @app.post("/api/performance/reset")
 async def reset_performance() -> JSONResponse:
     system_state.reset_performance()
+    if _server_loop is not None:
+        asyncio.run_coroutine_threadsafe(_broadcast({"type": "update_analytics"}), _server_loop)
     return JSONResponse({"success": True})
 
 

@@ -251,16 +251,23 @@ input[type=text]:focus,input[type=number]:focus{border-color:var(--bd2)}
 .log-conf{color:var(--t2);margin-left:auto}
 .log-check{margin-left:4px}
 
-/* Confirm strip */
-.confirm-row{
-  display:flex;align-items:center;gap:10px;
-  padding:10px 12px;background:var(--s2);
-  border:1px solid var(--bd);border-radius:7px;flex-wrap:wrap;
+/* Inline Confirm buttons */
+.log-action-wrap {
+  display: flex; gap: 4px; padding-left: 8px; opacity: 0; transform: translateX(10px);
+  transition: all 0.2s var(--ease); pointer-events: none;
 }
-.confirm-info{flex:1;min-width:0}
-.confirm-pred{font-family:var(--mono);font-size:10px;color:var(--t0)}
-.confirm-sub{font-family:var(--mono);font-size:9px;color:var(--t2);margin-top:2px}
-.confirm-btns{display:flex;gap:5px;flex-wrap:wrap}
+.log-row:hover .log-action-wrap, .log-row.unconfirmed .log-action-wrap { 
+  opacity: 1; transform: translateX(0); pointer-events: all; 
+}
+.btn-mini {
+  padding: 3px 6px; border-radius: 4px; font-family: var(--mono); font-size: 8px; font-weight: 600;
+  cursor: pointer; background: var(--s3); border: 1px solid var(--bd); color: var(--t1); transition: all .1s; text-transform: uppercase;
+}
+.btn-mini:hover { filter: brightness(1.3); }
+.btn-mini-m { background: rgba(91,156,246,.15); color: var(--cm); border-color: rgba(91,156,246,.3); }
+.btn-mini-p { background: rgba(245,166,35,.15); color: var(--cp); border-color: rgba(245,166,35,.3); }
+.btn-mini-g { background: rgba(155,114,245,.15); color: var(--cg); border-color: rgba(155,114,245,.3); }
+.btn-mini-r { background: rgba(242,113,138,.15); color: var(--cr); border-color: rgba(242,113,138,.3); }
 
 /* ROI picker controls (inside camera bottom hud) */
 .roi-pick-btn{
@@ -378,16 +385,16 @@ table.mt tr:hover td{background:var(--s2)}
   .sort4{grid-template-columns:1fr 1fr}
 }
 
-/* Heatmap Grid */
+/* Heatmap Grid - Enhanced with frontend-design constraints */
 #heatmap-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 2px;
-  background: var(--s2);
-  border: 1px solid var(--bd);
-  border-radius: 4px;
-  padding: 4px;
-  margin-top: 8px;
+  grid-template-columns: 70px repeat(4, 1fr); /* Actual labels + 4 Pred classes */
+  gap: 3px;
+  background: var(--bg);
+  border: 1px solid var(--bd2);
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 10px;
 }
 .hm-cell {
   aspect-ratio: 1;
@@ -396,26 +403,41 @@ table.mt tr:hover td{background:var(--s2)}
   align-items: center;
   justify-content: center;
   font-family: var(--mono);
-  font-size: 11px;
-  border-radius: 2px;
+  border-radius: 5px;
   position: relative;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  cursor: default;
 }
-.hm-label {
-  grid-column: span 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--t2);
-  text-transform: uppercase;
+.hm-cell:not(.hm-empty):hover {
+  transform: scale(1.06);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.6);
+  z-index: 10;
 }
-.hm-val { font-weight: 600; color: #fff; }
-.hm-pct { font-size: 8px; color: rgba(255,255,255,0.5); }
-.hm-head { font-size: 8px; color: var(--t2); text-align: center; line-height: 1.1; display: flex; align-items: center; justify-content: center; }
+.hm-cell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+  pointer-events: none;
+}
+.hm-empty { background: transparent !important; }
+.hm-val { font-weight: 500; color: #fff; font-size: 16px; line-height: 1; }
+.hm-pct { font-size: 9px; color: rgba(255,255,255,0.6); margin-top: 3px; }
+.hm-head { 
+  font-size: 9px; 
+  color: var(--t2); 
+  text-align: center; 
+  line-height: 1.3; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  font-weight: 600; 
+  letter-spacing: 0.05em; 
+}
 
 #k-eval { font-weight: 600; letter-spacing: 0; }
-.eval-excellent { color: #3fd68e; }
+.eval-excellent { color: #3fd68e; text-shadow: 0 0 10px rgba(63,214,142,0.3); }
 .eval-good      { color: #5b9cf6; }
 .eval-fair      { color: #f5a623; }
 .eval-poor      { color: #f2718a; }
@@ -527,20 +549,6 @@ table.mt tr:hover td{background:var(--s2)}
     </div>
     <div class="dash-log" id="dash-log">
       <div class="log-row"><span class="log-t">—</span><span style="color:var(--t2)">No activity yet</span></div>
-    </div>
-    <div style="height:1px;background:var(--bd);margin:10px 0"></div>
-    <!-- Confirm strip -->
-    <div class="confirm-row">
-      <div class="confirm-info">
-        <div class="confirm-pred" id="conf-pred">No prediction yet</div>
-        <div class="confirm-sub">Was the last sort correct? Select the actual class:</div>
-      </div>
-      <div class="confirm-btns">
-        <button class="btn btn-sm btn-m" onclick="confirmSort('metal')"  >Metal</button>
-        <button class="btn btn-sm btn-p" onclick="confirmSort('plastic')">Plastic</button>
-        <button class="btn btn-sm btn-g" onclick="confirmSort('glass')"  >Glass</button>
-        <button class="btn btn-sm btn-r" onclick="confirmSort('reject')" >Reject</button>
-      </div>
     </div>
   </div>
 
@@ -807,6 +815,14 @@ function connect() {
     else if (m.type==='tick')        { renderTick(m); }
     else if (m.type==='sort_result') { renderSort(m); }
     else if (m.type==='bin_levels')  { renderBins(m.levels); }
+    else if (m.type==='update_analytics') {
+      if (document.getElementById('p-anl').classList.contains('on')) {
+         loadAnalytics();
+      } else {
+         // Silently update snap in background if not viewing
+         api('GET','/api/full-snapshot').then(r=>{ if(r.ok) snap=r.data; });
+      }
+    }
   };
 }
 
@@ -854,9 +870,6 @@ function renderTick(t) {
   // log
   if (t.sort_history) renderLog(t.sort_history);
 
-  // confirm
-  if (t.last_label) confPred(t.last_label, t.last_confidence);
-
   // uptime & inference
   if (t.uptime_start) {
     const s = Math.floor(Date.now()/1000 - t.uptime_start);
@@ -903,14 +916,31 @@ function renderLog(history) {
   wrap.innerHTML = items.map(ev => {
     const cls=ev.label||'?', co=CLR[cls]||'var(--t1)';
     const conf=typeof ev.confidence==='number'?(ev.confidence*100).toFixed(0)+'%':'—';
-    const ck = ev.correct===null ? '' : ev.correct
-      ? `<span class="log-check" style="color:var(--ok)">✓</span>`
-      : `<span class="log-check" style="color:var(--err)">✗${ev.actual?` ${ev.actual}`:''}</span>`;
-    return `<div class="log-row">
-      <span class="log-t">${ev.time||'—'}</span>
+    
+    let actionHTML = '';
+    let checkHTML = '';
+    
+    if (ev.correct === null && ev.id) {
+       actionHTML = `
+       <div class="log-action-wrap">
+         <button class="btn-mini btn-mini-m" onclick="confirmSort('${ev.id}','metal')">M</button>
+         <button class="btn-mini btn-mini-p" onclick="confirmSort('${ev.id}','plastic')">P</button>
+         <button class="btn-mini btn-mini-g" onclick="confirmSort('${ev.id}','glass')">G</button>
+         <button class="btn-mini btn-mini-r" onclick="confirmSort('${ev.id}','reject')">R</button>
+       </div>`;
+    } else if (ev.correct !== null) {
+       checkHTML = ev.correct
+          ? `<span class="log-check" title="Correct Match" style="color:var(--ok)">✓</span>`
+          : `<span class="log-check" title="Actual: ${ev.actual}" style="color:var(--err)">✗ <span style="font-size:8px;opacity:0.7">${ev.actual.substring(0,1).toUpperCase()}</span></span>`;
+    }
+
+    return `<div class="log-row ${ev.correct===null?'unconfirmed':''}">
+      <span class="log-t" style="width:48px">${ev.time||'—'}</span>
       <span class="log-dot" style="background:${co}"></span>
-      <span class="log-cls-name" style="color:${co}">${cls}</span>
-      ${ck}
+      <span class="log-cls-name" style="color:${co}; width:60px;">${cls}</span>
+      ${actionHTML}
+      <div style="flex:1;"></div>
+      ${checkHTML}
       <span class="log-conf">${conf}</span>
     </div>`;
   }).join('');
@@ -1209,9 +1239,12 @@ function svPreset(name,angle){
 }
 async function setFlash(on){ await api('POST','/control/flash',{on}); toast(`Flash ${on?'ON':'OFF'}`,true); }
 async function manualSort(cls){ const r=await api('POST','/control/sort',{class:cls}); if(r.ok) toast(`Manual: ${cls}`,true); }
-async function confirmSort(actual){
-  const r=await api('POST','/api/performance/confirm',{actual_class:actual});
-  if(r.ok) toast(`Confirmed: ${actual}`,true);
+async function confirmSort(eventId, actual){
+  const r=await api('POST','/api/performance/confirm',{event_id: eventId, actual_class:actual});
+  if(r.ok) {
+    toast(`Confirmed: ${actual}`,true);
+    // update_analytics WS will trigger redraw
+  }
 }
 async function resetStats(){ await api('POST','/api/stats/reset'); toast('Stats reset',true); }
 async function resetCm()   { await api('POST','/api/performance/reset'); toast('Confusion reset',true); if(charts.cm) buildCm({}); }
@@ -1265,36 +1298,42 @@ function buildCharts(s){
   renderHeatmap(s.confusion_matrix||{});
   buildLine(s.inference_times_ms||[]);
   
-  // Calculate Global Metrics
+  // Calculate Global Metrics (Weighted Average - "เน้นตามจำนวนข้อมูลจริงทั้งหมด")
   const cm = s.confusion_matrix || {};
   let totalAll = 0, totalTP = 0;
-  let precSum = 0, recSum = 0, countClassesWithData = 0;
+  let weightedPrec = 0, weightedRec = 0;
+
+  CLASSES.forEach(cls => {
+    const tp = (cm[cls] && cm[cls][cls]) || 0;
+    const actualTotal = CLASSES.reduce((sum, p) => sum + ((cm[cls] && cm[cls][p]) || 0), 0);
+    
+    totalTP += tp;
+    totalAll += actualTotal;
+  });
 
   CLASSES.forEach(cls => {
     const tp = (cm[cls] && cm[cls][cls]) || 0;
     const actualTotal = CLASSES.reduce((sum, p) => sum + ((cm[cls] && cm[cls][p]) || 0), 0);
     const predTotal = CLASSES.reduce((sum, a) => sum + ((cm[a] && cm[a][cls]) || 0), 0);
     
-    totalTP += tp;
-    totalAll += actualTotal;
+    const prec = predTotal > 0 ? (tp / predTotal) : 0;
+    const rec = actualTotal > 0 ? (tp / actualTotal) : 0;
 
-    if (actualTotal > 0 || predTotal > 0) {
-      countClassesWithData++;
-      precSum += predTotal > 0 ? (tp / predTotal) : 0;
-      recSum += actualTotal > 0 ? (tp / actualTotal) : 0;
+    if (totalAll > 0) {
+      const weight = actualTotal / totalAll;
+      weightedPrec += prec * weight;
+      weightedRec += rec * weight;
     }
   });
 
   const acc = totalAll > 0 ? (totalTP / totalAll) : 0;
-  const mPrec = countClassesWithData > 0 ? (precSum / countClassesWithData) : 0;
-  const mRec  = countClassesWithData > 0 ? (recSum / countClassesWithData) : 0;
-  const f1 = (mPrec + mRec) > 0 ? (2 * mPrec * mRec / (mPrec + mRec)) : 0;
+  const f1 = (weightedPrec + weightedRec) > 0 ? (2 * weightedPrec * weightedRec / (weightedPrec + weightedRec)) : 0;
 
   document.getElementById('k-acc').textContent = totalAll > 0 ? `${(acc * 100).toFixed(1)}%` : '—';
   document.getElementById('k-err').textContent = totalAll > 0 ? `${((1 - acc) * 100).toFixed(1)}%` : '—';
-  document.getElementById('k-prec').textContent = countClassesWithData > 0 ? `${(mPrec * 100).toFixed(1)}%` : '—';
-  document.getElementById('k-rec').textContent = countClassesWithData > 0 ? `${(mRec * 100).toFixed(1)}%` : '—';
-  document.getElementById('k-f1').textContent = (mPrec + mRec) > 0 ? f1.toFixed(2) : '—';
+  document.getElementById('k-prec').textContent = totalAll > 0 ? `${(weightedPrec * 100).toFixed(1)}%` : '—';
+  document.getElementById('k-rec').textContent  = totalAll > 0 ? `${(weightedRec * 100).toFixed(1)}%` : '—';
+  document.getElementById('k-f1').textContent   = totalAll > 0 ? `${(f1 * 100).toFixed(1)}%` : '—';
 
   // Evaluation Result
   const evalEl = document.getElementById('k-eval');
@@ -1322,28 +1361,50 @@ function renderHeatmap(cm) {
   grid.innerHTML = '';
   
   // Headers (Predicted)
-  grid.appendChild(createHmEl('', 'hm-head')); 
-  CLASSES.forEach(p => grid.appendChild(createHmEl('PRED:<br>'+p.toUpperCase(), 'hm-head')));
+  grid.appendChild(createHmEl('', 'hm-empty')); 
+  CLASSES.forEach(p => grid.appendChild(createHmEl(`<span style="color:${CLR[p]}">${p.toUpperCase()}</span>`, 'hm-head')));
   
+  let maxVal = 0;
+  CLASSES.forEach(actual => {
+    CLASSES.forEach(pred => {
+      const val = (cm[actual] && cm[actual][pred]) || 0;
+      if (val > maxVal) maxVal = val;
+    });
+  });
+
   CLASSES.forEach(actual => {
     // Row Header (Actual)
-    grid.appendChild(createHmEl('ACTUAL:<br>'+actual.toUpperCase(), 'hm-head'));
+    grid.appendChild(createHmEl(`<span style="color:${CLR[actual]}">${actual.toUpperCase()}</span>`, 'hm-head'));
     
     const rowTotal = CLASSES.reduce((sum, p) => sum + ((cm[actual] && cm[actual][p]) || 0), 0);
     
     CLASSES.forEach(pred => {
       const val = (cm[actual] && cm[actual][pred]) || 0;
-      const pct = rowTotal > 0 ? (val / rowTotal) : 0;
+      const pctRow = rowTotal > 0 ? (val / rowTotal) : 0;
+      const pctGlobal = maxVal > 0 ? (val / maxVal) : 0;
+      
       const cell = document.createElement('div');
       cell.className = 'hm-cell';
+      cell.setAttribute('title', `Actual: ${actual}\nPredicted: ${pred}\nCount: ${val}`);
       
-      // Color intensity based on percentage
-      const alpha = 0.1 + pct * 0.8;
-      const baseCol = actual === pred ? '63, 214, 142' : '242, 113, 138'; // Green for TP, Red for Errors
-      cell.style.background = `rgba(${baseCol}, ${alpha})`;
-      if (pct > 0.5) cell.style.color = '#000';
-      
-      cell.innerHTML = `<span class="hm-val">${val}</span><span class="hm-pct">${(pct*100).toFixed(0)}%</span>`;
+      if (rowTotal === 0) {
+         cell.style.background = 'var(--s1)';
+         cell.innerHTML = `<span class="hm-val" style="color:var(--t3)">0</span>`;
+      } else {
+         const alpha = 0.15 + (pctGlobal * 0.85); 
+         const isMatch = actual === pred;
+         
+         const rgb = isMatch ? '63, 214, 142' : '242, 113, 138';
+         cell.style.background = `rgba(${rgb}, ${alpha})`;
+         
+         const txtColor = (alpha > 0.55 && isMatch) ? '#000' : '#fff';
+         const subColor = (alpha > 0.55 && isMatch) ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
+         
+         cell.innerHTML = `
+           <span class="hm-val" style="color:${txtColor}">${val}</span>
+           <span class="hm-pct" style="color:${subColor}">${(pctRow*100).toFixed(0)}%</span>
+         `;
+      }
       grid.appendChild(cell);
     });
   });
