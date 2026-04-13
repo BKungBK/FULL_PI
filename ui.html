@@ -683,8 +683,8 @@ table.mt tr:hover td{background:var(--s2)}
                oninput="document.getElementById('t-cd-v').textContent=this.value">
       </div>
       <div class="sl-row">
-        <div class="sl-hdr"><span>YOLO Confidence</span><span id="t-yc-v">0.40</span></div>
-        <input type="range" id="t-yc" min="10" max="90" value="40"
+        <div class="sl-hdr"><span>Min Confidence</span><span id="t-yc-v">0.50</span></div>
+        <input type="range" id="t-yc" min="10" max="90" value="50"
                oninput="document.getElementById('t-yc-v').textContent=(this.value/100).toFixed(2)">
       </div>
       <button class="btn btn-sm" onclick="applyThresh()" style="align-self:flex-start">Apply</button>
@@ -1024,6 +1024,18 @@ api('GET','/api/cam-info').then(r=>{
   }
 });
 
+// Fetch saved ROI config from backend on load
+api('GET','/api/roi').then(r=>{
+  if(r.ok && r.data){
+    roiSt.cx = r.data.cx;
+    roiSt.cy = r.data.cy;
+    roiSt.size = r.data.size;
+    const szsl = document.getElementById('roi-sz-sl');
+    if(szsl) szsl.value = r.data.size;
+    drawRoi();
+  }
+});
+
 function _camStreamUrl(){
   if(_camDirectMode && _espIpCache)
     return `http://${_espIpCache}:81/stream?t=${Date.now()}`;
@@ -1139,7 +1151,7 @@ function applyThresh(){
     detect_dist:  +document.getElementById('t-det').value,
     withdraw_dist:+document.getElementById('t-wd').value,
     cooldown:     +document.getElementById('t-cd').value,
-    yolo_conf:    +document.getElementById('t-yc').value/100,
+    min_conf:     +document.getElementById('t-yc').value/100,
   }); toast('Thresholds applied',true);
 }
 

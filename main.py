@@ -124,6 +124,7 @@ class Config:
     HAND_WITHDRAWN_DISTANCE_CM: float = 20.0   # hysteresis for release
     BIN_FULL_DISTANCE_CM: float = 10.0
     COOLDOWN_SECONDS: float = 5.0
+    MIN_CONFIDENCE_THRESHOLD: float = 0.50     # minimum score before reject
     CAMERA_RECONNECT_DELAY: float = 1.0
     ULTRASONIC_TIMEOUT: float = 0.1
     CAMERA_BUFFER_SIZE: int = 10  # rolling frame buffer depth
@@ -339,15 +340,27 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
         idx = int(np.argmax(output))
         conf = float(output[idx])
         
-        # reject คือน้อยกว่า 0.5 ทั้งหมด
-        if conf < 0.5:
+        # reject คือน้อยกว่าค่าที่ตั้งไว้ทั้งหมด
+        if conf < Config.MIN_CONFIDENCE_THRESHOLD:
             return "reject", conf
             
-        class_name = (
+        class_name_raw = (
             Config.CLASS_NAMES[idx]
             if idx < len(Config.CLASS_NAMES)
             else "reject"
         )
+        
+        # Normalize class name for UI tracking + color matching
+        ll = class_name_raw.lower()
+        if "plastic" in ll or "pet" in ll or "hdpe" in ll:
+            class_name = "plastic"
+        elif "metal" in ll or "can" in ll:
+            class_name = "metal"
+        elif "glass" in ll:
+            class_name = "glass"
+        else:
+            class_name = "reject"
+            
         return class_name, conf
     except Exception as e:
         logger.error("Predict error: %s", e)
@@ -548,17 +561,17 @@ class HardwareController:
             time.sleep(delay)
 
     def idle_servos(self) -> None:
-        """Stop PWM signal to reduce servo heat and prevent jitter.
-
-        Uses tx_pwm(pin, 0, 0) to cancel the PWM waveform entirely.
-        tx_servo(pin, 0) is documented to stop servos but some lgpio
-        versions reject pulseWidth=0 as 'bad PWM micros'.
-        """
+        """Stop PWM signal to reduce servo heat and prevent jitter."""
         for pin in (Config.SERVO1_PIN, Config.SERVO2_PIN):
             try:
-                lgpio.tx_pwm(self._h, pin, 0, 0)   # freq=0, duty=0 → stop
-            except Exception as exc:
-                logger.debug("idle_servos pin %d: %s", pin, exc)
+                # Standard way to cut PWM on RPi with lgpio
+                lgpio.tx_servo(self._h, pin, 0)
+            except Exception:
+                try:
+                    # Fallback: keep frequency but 0% duty
+                    lgpio.tx_pwm(self._h, pin, 50, 0)
+                except Exception as exc:
+                    logger.debug("idle_servos pin %d: %s", pin, exc)
 
     # ── ultrasonic ────────────────────────────────────────────────────
 
@@ -689,6 +702,33 @@ class SmartBinEngine:
         self._cam: Optional[CameraStream] = None
         self._esp32_ip: str = ""
         self._cv2_ok: bool = True   # flipped False on first headless cv2.error
+        self._load_roi_config()
+
+    def _load_roi_config(self) -> None:
+        import os, json
+        try:
+            if os.path.exists("roi_config.json"):
+                with open("roi_config.json", "r") as f:
+                    data = json.load(f)
+                    Config.ROI_CENTER_X = data.get("cx", 320)
+                    Config.ROI_CENTER_Y = data.get("cy", 240)
+                    Config.ROI_SIZE     = data.get("size", 320)
+                logger.info("Loaded ROI from config: cx=%d cy=%d size=%d", 
+                            Config.ROI_CENTER_X, Config.ROI_CENTER_Y, Config.ROI_SIZE)
+        except Exception as e:
+            logger.error("Failed to load ROI config: %s", e)
+
+    def _save_roi_config(self) -> None:
+        import json
+        try:
+            with open("roi_config.json", "w") as f:
+                json.dump({
+                    "cx": Config.ROI_CENTER_X,
+                    "cy": Config.ROI_CENTER_Y,
+                    "size": Config.ROI_SIZE
+                }, f)
+        except Exception as e:
+            logger.error("Failed to save ROI config: %s", e)
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -819,16 +859,18 @@ class SmartBinEngine:
             if name == "capture":
                 # Use smooth_move for slider — avoids quantum-jump jerk
                 hw.smooth_move(Config.SERVO1_PIN, angle, steps=12, delay=0.015)
+                time.sleep(0.3)
+                hw.idle_servos()
             elif name == "sort":
                 # smooth_move gives the same feel as manual_sort buttons
                 hw.smooth_move(Config.SERVO2_PIN, angle, steps=12, delay=0.015)
+                time.sleep(0.3)
+                hw.idle_servos()
             elif name == "all":
                 hw.smooth_move(Config.SERVO1_PIN, angle, steps=12, delay=0.015)
                 hw.smooth_move(Config.SERVO2_PIN, angle, steps=12, delay=0.015)
-                # Only idle after 'all' (reset to home)
-                if angle == Config.CENTER_ANGLE:
-                    time.sleep(0.2)
-                    hw.idle_servos()
+                time.sleep(0.3)
+                hw.idle_servos()
         elif action == "flash":
             self._send_flash(on=bool(cmd.get("on", False)))
         elif action == "mode":
@@ -838,11 +880,13 @@ class SmartBinEngine:
             Config.ROI_CENTER_X = int(cmd.get("cx", 320))
             Config.ROI_CENTER_Y = int(cmd.get("cy", 240))
             Config.ROI_SIZE     = int(cmd.get("size", 320))
+            self._save_roi_config()
+            logger.info("ROI updated & saved: cx=%d cy=%d size=%d", Config.ROI_CENTER_X, Config.ROI_CENTER_Y, Config.ROI_SIZE)
         elif action == "update_config":
             if "detect_dist"    in cmd: Config.DETECT_DISTANCE_CM          = float(cmd["detect_dist"])
             if "withdraw_dist"  in cmd: Config.HAND_WITHDRAWN_DISTANCE_CM  = float(cmd["withdraw_dist"])
             if "cooldown"       in cmd: Config.COOLDOWN_SECONDS             = float(cmd["cooldown"])
-            if "yolo_conf"      in cmd: Config.YOLO_CONF_THRESHOLD          = float(cmd["yolo_conf"])
+            if "min_conf"       in cmd: Config.MIN_CONFIDENCE_THRESHOLD     = float(cmd["min_conf"])
         elif action == "manual_sort":
             cls = cmd.get("class", "reject")
             logger.info("Manual sort triggered: %s", cls)

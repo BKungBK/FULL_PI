@@ -458,11 +458,23 @@ async def set_roi(body: dict) -> JSONResponse:
     })
     return JSONResponse({"success": True})
 
+@app.get("/api/roi")
+async def get_roi() -> JSONResponse:
+    import main
+    return JSONResponse({
+        "success": True,
+        "data": {
+            "cx": main.Config.ROI_CENTER_X,
+            "cy": main.Config.ROI_CENTER_Y,
+            "size": main.Config.ROI_SIZE,
+        }
+    })
+
 
 @app.post("/control/config")
 async def update_config(body: dict) -> JSONResponse:
     cmd = {"action": "update_config"}
-    for k in ("detect_dist", "withdraw_dist", "cooldown", "yolo_conf"):
+    for k in ("detect_dist", "withdraw_dist", "cooldown", "min_conf"):
         if k in body:
             cmd[k] = body[k]
     system_state.send_command(cmd)
