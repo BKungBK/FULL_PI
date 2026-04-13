@@ -21,6 +21,7 @@ Output:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -216,19 +217,37 @@ async def capture(body: CaptureBody):
     if body.label not in LABELS:
         return JSONResponse({"error": f"Invalid label: {body.label}"}, 400)
 
-    # ── 1. Grab single JPEG from ESP32 ────────────────────────
+    # ── 1. Turn ON Flashlight ─────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.get(f"http://{ESP32_IP}/control?var=led_intensity&val=200")
+            await asyncio.sleep(0.4) # Wait for camera auto-exposure to adjust to light
+    except Exception as exc:
+        logger.warning(f"Failed to turn ON flash: {exc}")
+
+    # ── 2. Grab single JPEG from ESP32 ────────────────────────
+    img_bytes = None
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"http://{ESP32_IP}/capture")
-            if resp.status_code != 200:
-                return JSONResponse(
-                    {"error": f"ESP32 returned {resp.status_code}"}, 500
-                )
-            img_bytes = resp.content
+            if resp.status_code == 200:
+                img_bytes = resp.content
+            else:
+                resp_error = resp.status_code
     except Exception as exc:
-        return JSONResponse({"error": f"Cannot reach ESP32: {exc}"}, 500)
+        logger.error(f"Cannot reach ESP32 capture: {exc}")
 
-    # ── 2. Decode ─────────────────────────────────────────────
+    # ── 3. Turn OFF Flashlight ────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.get(f"http://{ESP32_IP}/control?var=led_intensity&val=0")
+    except Exception as exc:
+        logger.warning(f"Failed to turn OFF flash: {exc}")
+
+    if not img_bytes:
+        return JSONResponse({"error": "Failed to get image from ESP32"}, 500)
+
+    # ── 4. Decode ─────────────────────────────────────────────
     arr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -236,7 +255,7 @@ async def capture(body: CaptureBody):
 
     h, w = img.shape[:2]
 
-    # ── 3. Crop square region at (cx, cy) ─────────────────────
+    # ── 5. Crop square region at (cx, cy) ─────────────────────
     half = body.size // 2
     x1 = max(0, body.cx - half)
     y1 = max(0, body.cy - half)
@@ -247,15 +266,15 @@ async def capture(body: CaptureBody):
     if crop.size == 0:
         return JSONResponse({"error": "Empty crop region"}, 500)
 
-    # ── 4. Resize to 96×96 ────────────────────────────────────
+    # ── 6. Resize to 96×96 ────────────────────────────────────
     resized = cv2.resize(
         crop, (OUTPUT_SIZE, OUTPUT_SIZE), interpolation=cv2.INTER_AREA
     )
 
-    # ── 5. Post-process: CLAHE ────────────────────────────────
+    # ── 7. Post-process: CLAHE ────────────────────────────────
     processed = postprocess(resized)
 
-    # ── 6. Save original ──────────────────────────────────────
+    # ── 8. Save original ──────────────────────────────────────
     ts = int(time.time() * 1000)
     save_dir = DATASET_DIR / body.label
 
@@ -266,7 +285,7 @@ async def capture(body: CaptureBody):
     )
     saved_count = 1
 
-    # ── 7. Data Augmentation ──────────────────────────────────
+    # ── 9. Data Augmentation ──────────────────────────────────
     if AUGMENT_ENABLED:
         aug_variants = augment(processed)
         for suffix, aug_img in aug_variants:
