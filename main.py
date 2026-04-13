@@ -536,15 +536,15 @@ class HardwareController:
         target: float,
         speed: float = 30.0,
     ) -> None:
-        """Interpolate servo using a Delta-Time loop and Quartic Easing.
-        This provides perfect 100% fluid movement immune to OS stutter,
-        with an extremely long braking phase so the bin doesn't sway.
-        """
+        """Interpolate servo using a Delta-Time loop and Quartic Easing."""
         home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
         start = self._last_angle.get(pin, home_angle)
+        
+        # ตัดทศนิยมเป้าหมายให้เป็นจำนวนเต็มเพื่อไม่ให้มีเศษ
+        target = float(round(target))
         distance = abs(target - start)
         
-        if distance < 0.5:
+        if distance < 1.0:
             self.move_servo(pin, target)
             return
 
@@ -558,12 +558,9 @@ class HardwareController:
             t = elapsed / duration
             
             if t >= 1.0:
-                # Force final strict angle to stop micro-chatter
                 self.move_servo(pin, target)
                 break
                 
-            # Ease-In-Out Quart Formula
-            # Extremely soft start -> fast middle -> Extremely soft landing (slowest at end)
             if t < 0.5:
                 eased_t = 8.0 * (t ** 4)
             else:
@@ -571,9 +568,13 @@ class HardwareController:
                 eased_t = 1.0 - ((p ** 4) / 2.0)
                 
             current = start + (target - start) * eased_t
-            self.move_servo(pin, current)
             
-            # Tiny sleep to yield CPU, but position is tied to pure time, not loop cycles
+            # แจ้งแก้: เมื่อระยะเหลือ < 1.0 องศา (เหลือเป็น 0.xxx) ให้ตัดเศษและเข้าเป้าเลย ป้องกันเซอร์โวสั่นกึกๆ
+            if abs(target - current) < 1.0:
+                self.move_servo(pin, target)
+                break
+                
+            self.move_servo(pin, current)
             time.sleep(0.005)
 
     def idle_servos(self, force: bool = False) -> None:
