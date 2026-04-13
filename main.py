@@ -896,8 +896,8 @@ class SmartBinEngine:
             time.sleep(0.5)
             hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, steps=10, delay=0.01)
             time.sleep(0.5)
-            hw.move_servo(Config.SERVO1_PIN, Config.CENTER_ANGLE)
-            hw.move_servo(Config.SERVO2_PIN, Config.CENTER_ANGLE)
+            hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, steps=10, delay=0.01)
+            hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, steps=10, delay=0.01)
             time.sleep(0.2)
             hw.idle_servos()
             if system_state:
@@ -928,7 +928,7 @@ class SmartBinEngine:
         assert hw
 
         # t=0.00 — Pre-emptive: tilt capture arm to photo position
-        hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
+        hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, steps=10, delay=0.01)
         logger.info("[t=%.3f] Pre-emptive Servo1 → %d°",
                     time.monotonic() - t0, Config.PHOTO_ANGLE)
 
@@ -981,8 +981,8 @@ class SmartBinEngine:
 
         # t~2.00 — Reset: all servos home
         time.sleep(0.5) # Wait for dump
-        hw.move_servo(Config.SERVO1_PIN, Config.CENTER_ANGLE)
-        hw.move_servo(Config.SERVO2_PIN, Config.CENTER_ANGLE)
+        hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, steps=10, delay=0.01)
+        hw.smooth_move(Config.SERVO2_PIN, Config.CENTER_ANGLE, steps=10, delay=0.01)
         time.sleep(0.2)
         hw.idle_servos()
         logger.info("[t=%.3f] Reset complete", time.monotonic() - t0)
