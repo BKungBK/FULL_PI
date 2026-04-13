@@ -290,6 +290,14 @@ def preprocess_yolo(frame: np.ndarray) -> Tuple[np.ndarray, LetterboxInfo]:
     )
 
 
+def apply_clahe(img: np.ndarray) -> np.ndarray:
+    """Apply CLAHE adaptive contrast enhancement. (Matches dataset_tool.py)"""
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
 def prepare_image(img: np.ndarray) -> np.ndarray:
     """Crop center square and resize specifically for Teachable Machine models."""
     h_img, w_img = img.shape[:2]
@@ -351,7 +359,11 @@ def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
     roi_frame, roi_coords = crop_roi(frame)
     g_state.last_roi_coords = roi_coords
     roi224 = prepare_image(roi_frame)
-    return predict(roi224)
+    
+    # ── Match exact dataset_tool.py preprocessing ──
+    processed = apply_clahe(roi224)
+    
+    return predict(processed)
 
 
 def classify_with_voting(frames: List[np.ndarray]) -> Tuple[str, float, float]:
@@ -846,11 +858,25 @@ class SmartBinEngine:
             if system_state:
                 system_state.add_sort_event(cls, 1.0, 0.0)
 
+    def _capture_http_frame(self) -> Optional[np.ndarray]:
+        """Grab a single high-quality frame directly from ESP32 /capture endpoint."""
+        url = f"http://{self._esp32_ip}/capture"
+        try:
+            resp = requests.get(url, timeout=5.0)
+            if resp.status_code == 200:
+                arr = np.frombuffer(resp.content, np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                return img
+            else:
+                logger.error("HTTP capture returned status %d", resp.status_code)
+        except Exception as exc:
+            logger.error("HTTP capture error: %s", exc)
+        return None
+
     def _process_detection(self) -> None:
         """Execute the full detection pipeline according to timing spec.
-
-        Called from the main loop when hand withdrawal is detected.
-        Blocks the sensor loop for ~1.5 s (by design).
+        
+        Matches dataset_tool.py capture pipeline for reliable inference.
         """
         t0 = time.monotonic()
         hw = self._hw
@@ -864,32 +890,35 @@ class SmartBinEngine:
         # Flash ON
         self._send_flash(on=True)
 
-        # t=0.50 — Grab 5 latest frames from rolling buffer
-        time.sleep(max(0.0, 0.50 - (time.monotonic() - t0)))
-        frames = self._cam.get_recent_frames(Config.VOTE_FRAMES)  # type: ignore[union-attr]
-        logger.info("[t=%.3f] Grabbed %d frames", time.monotonic() - t0, len(frames))
-
-        if not frames:
-            logger.warning("No frames in buffer — aborting")
+        # t=0.80 — Wait for ESP32 auto-exposure to adapt to flash
+        time.sleep(max(0.0, 0.80 - (time.monotonic() - t0)))
+        
+        # Grab reliable high-res frame via HTTP
+        frame = self._capture_http_frame()
+        self._send_flash(on=False) # Turn off immediately after capture
+        
+        if frame is None:
+            logger.warning("Failed to capture HTTP frame — aborting")
             hw.move_servo(Config.SERVO1_PIN, Config.CENTER_ANGLE)
             hw.idle_servos()
-            self._send_flash(on=False)
             return
 
-        # t~0.50–0.55 — Inference (sequential 5-frame vote)
-        label, conf, elapsed_ms = classify_with_voting(frames)
+        # Inference on single reliable frame
+        start_ms = time.time() * 1000.0
+        label, conf = classify_single_frame(frame)
+        elapsed_ms = (time.time() * 1000.0) - start_ms
+        
         logger.info(
             "[t=%.3f] Result: %s (conf=%.2f, %.1f ms)",
             time.monotonic() - t0, label, conf, elapsed_ms,
         )
 
-        self._send_flash(on=False)
         self._record_sort(label, conf, elapsed_ms)
 
         # Return Servo1 to center before bin rotation
         hw.smooth_move(Config.SERVO1_PIN, Config.CENTER_ANGLE, steps=10, delay=0.01)
 
-        # t~0.65 — Sort command: Servo2 → target bin angle
+        # t~1.20 — Sort command: Servo2 → target bin angle
         target_angle = self._label_to_angle(label)
         hw.smooth_move(Config.SERVO2_PIN, target_angle, steps=10, delay=0.01)
         logger.info(
@@ -897,16 +926,16 @@ class SmartBinEngine:
             time.monotonic() - t0, target_angle, label,
         )
 
-        # t=1.00 — Drop: Servo1 tips waste
-        time.sleep(max(0.0, 1.00 - (time.monotonic() - t0)))
+        # t~1.50 — Drop: Servo1 tips waste
+        time.sleep(0.3) # Wait for Servo2 to finish
         hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, steps=10, delay=0.01)
         logger.info(
             "[t=%.3f] Drop: Servo1 → %d°",
             time.monotonic() - t0, Config.SWEEP_ANGLE,
         )
 
-        # t=1.50 — Reset: all servos home
-        time.sleep(max(0.0, 1.50 - (time.monotonic() - t0)))
+        # t~2.00 — Reset: all servos home
+        time.sleep(0.5) # Wait for dump
         hw.move_servo(Config.SERVO1_PIN, Config.CENTER_ANGLE)
         hw.move_servo(Config.SERVO2_PIN, Config.CENTER_ANGLE)
         time.sleep(0.2)
