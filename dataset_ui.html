@@ -333,9 +333,9 @@ main{display:flex;flex:1;overflow:hidden}
     <div class="ctrl-section">
       <div class="ctrl-title">Crop Region</div>
       <div class="slider-row">
-        <input type="range" id="crop-slider" min="64" max="400" value="200"
+        <input type="range" id="crop-slider" min="64" max="640" value="480"
                oninput="cropSize=+this.value;document.getElementById('crop-val').textContent=this.value+'px';drawOverlay()">
-        <span class="slider-val" id="crop-val">200px</span>
+        <span class="slider-val" id="crop-val">480px</span>
       </div>
     </div>
 
@@ -407,7 +407,7 @@ const LABEL_CLR = {plastic:'#f59e0b',metal:'#3b82f6',glass:'#a855f7'};
 
 let currentLabel = 'plastic';
 let cropCx = CAM_W / 2, cropCy = CAM_H / 2;
-let cropSize = 200;
+let cropSize = 480;
 let dragging = false;
 let capturing = false;
 
