@@ -339,6 +339,16 @@ main{display:flex;flex:1;overflow:hidden}
       </div>
     </div>
 
+    <!-- Flash Control -->
+    <div class="ctrl-section">
+      <div class="ctrl-title">Flash Brightness</div>
+      <div class="slider-row">
+        <input type="range" id="flash-slider" min="0" max="255" value="100"
+               oninput="document.getElementById('flash-val').textContent=this.value">
+        <span class="slider-val" id="flash-val">100</span>
+      </div>
+    </div>
+
     <!-- Preview -->
     <div class="ctrl-section">
       <div class="ctrl-title">96×96 Preview</div>
@@ -644,6 +654,7 @@ async function doCapture() {
   setTimeout(() => { flash.classList.remove('fire'); flash.classList.add('fade'); }, 60);
 
   try {
+    const flashIntensity = parseInt(document.getElementById('flash-slider').value, 10);
     const resp = await fetch(`${HOST}/capture`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -652,6 +663,7 @@ async function doCapture() {
         cx: Math.round(cropCx),
         cy: Math.round(cropCy),
         size: cropSize,
+        flash: flashIntensity,
       }),
     });
     const data = await resp.json();

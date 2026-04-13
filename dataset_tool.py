@@ -200,28 +200,20 @@ class CaptureBody(BaseModel):
     cx: int = 320
     cy: int = 240
     size: int = 200
+    flash: int = 100  # Default 100 instead of 200 for enclosed bins
 
 
 @app.post("/capture")
 async def capture(body: CaptureBody):
-    """Grab frame → crop → resize 96×96 → CLAHE → save + augment.
-
-    Pipeline:
-        1. GET /capture from ESP32 (single JPEG, port 80)
-        2. Crop square region centred on (cx, cy)
-        3. Resize to 96×96 with INTER_AREA (best for downscale)
-        4. Apply CLAHE adaptive contrast
-        5. Save original
-        6. Generate & save 12 augmented variants
-    """
+    """Grab frame → crop → resize 96×96 → CLAHE → save + augment."""
     if body.label not in LABELS:
         return JSONResponse({"error": f"Invalid label: {body.label}"}, 400)
 
     # ── 1. Turn ON Flashlight ─────────────────────────────────
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            await client.get(f"http://{ESP32_IP}/control?var=led_intensity&val=200")
-            await asyncio.sleep(0.4) # Wait for camera auto-exposure to adjust to light
+            await client.get(f"http://{ESP32_IP}/control?var=led_intensity&val={body.flash}")
+            await asyncio.sleep(0.8) # Wait 0.8s for camera auto-exposure to clamp down
     except Exception as exc:
         logger.warning(f"Failed to turn ON flash: {exc}")
 
