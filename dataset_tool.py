@@ -368,17 +368,17 @@ def _get_counts() -> dict:
 # ── CLI entry ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    aug_label = "ON (×13 per capture)" if AUGMENT_ENABLED else "OFF"
-    print(f"\n{'═' * 52}")
+    aug_label = "ON (x13 per capture)" if AUGMENT_ENABLED else "OFF"
+    print(f"\n{'=' * 52}")
     print(f"  SmartBin Dataset Collection Tool")
-    print(f"{'═' * 52}")
+    print(f"{'=' * 52}")
     print(f"  ESP32-CAM:     {ESP32_IP}")
     print(f"  Dataset:       {DATASET_DIR}")
-    print(f"  Output:        {OUTPUT_SIZE}×{OUTPUT_SIZE} JPEG")
+    print(f"  Output:        {OUTPUT_SIZE}x{OUTPUT_SIZE} JPEG")
     print(f"  Labels:        {', '.join(LABELS)}")
     print(f"  CLAHE:         ON (clipLimit=2.0)")
     print(f"  Augmentation:  {aug_label}")
     print(f"  Open:          http://localhost:{PORT}")
-    print(f"{'═' * 52}\n")
+    print(f"{'=' * 52}\n")
 
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
