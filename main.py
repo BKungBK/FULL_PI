@@ -529,7 +529,10 @@ def dequantize_output(output_data: np.ndarray, output_detail: dict) -> np.ndarra
 
 
 def preprocess_classifier(crop: np.ndarray) -> np.ndarray:
-    """Preprocess cropped image for the classifier based on model metadata."""
+    """Preprocess cropped image for the classifier based on model metadata.
+
+    Applies CLAHE adaptive contrast to match training-data preprocessing.
+    """
     interpreter = g_state.classifier_interpreter
     if interpreter is None:
         raise RuntimeError("Classifier is not initialized")
@@ -537,7 +540,13 @@ def preprocess_classifier(crop: np.ndarray) -> np.ndarray:
     input_detail = interpreter.get_input_details()[0]
     input_h, input_w = get_image_size_from_shape(input_detail["shape"])
 
-    resized = cv2.resize(crop, (input_w, input_h), interpolation=cv2.INTER_LINEAR)
+    # CLAHE — matches dataset_tool.py postprocess() for train/infer consistency
+    lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    crop = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    resized = cv2.resize(crop, (input_w, input_h), interpolation=cv2.INTER_AREA)
     normalized = resized.astype(np.float32) / 255.0
     input_data = np.expand_dims(normalized, axis=0)
     return quantize_input(input_data, input_detail)

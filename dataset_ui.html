@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartBin — Dataset Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   SMARTBIN DATASET TOOL — Industrial-precision aesthetic
+   Purpose-built for rapid image dataset collection.
+   ================================================================ */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0b;
+  --s1:#111113;
+  --s2:#18181b;
+  --s3:#232328;
+  --s4:#2e2e35;
+  --bd:rgba(255,255,255,.06);
+  --bd2:rgba(255,255,255,.12);
+  --t0:#f0f0f2;
+  --t1:#a0a0aa;
+  --t2:#5a5a66;
+  --t3:#35353e;
+  /* label colours */
+  --plastic:#f59e0b;
+  --plastic-bg:rgba(245,158,11,.08);
+  --plastic-bd:rgba(245,158,11,.25);
+  --metal:#3b82f6;
+  --metal-bg:rgba(59,130,246,.08);
+  --metal-bd:rgba(59,130,246,.25);
+  --glass:#a855f7;
+  --glass-bg:rgba(168,85,247,.08);
+  --glass-bd:rgba(168,85,247,.25);
+  --ok:#34d399;
+  --err:#f87171;
+  /* type */
+  --head:'Outfit',sans-serif;
+  --mono:'JetBrains Mono',monospace;
+  --ease:cubic-bezier(.22,.68,0,1.2);
+}
+html,body{height:100%;background:var(--bg);color:var(--t0);font-family:var(--head);
+  -webkit-font-smoothing:antialiased;overflow:hidden}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--s4);border-radius:3px}
+
+/* ── layout ───────────────────────────────────────────── */
+#app{display:flex;flex-direction:column;height:100vh}
+header{
+  display:flex;align-items:center;gap:12px;
+  height:52px;padding:0 20px;
+  border-bottom:1px solid var(--bd);
+  background:var(--bg);flex-shrink:0;
+}
+.logo{
+  font-family:var(--mono);font-size:13px;font-weight:600;
+  letter-spacing:.06em;color:var(--t0);
+}
+.logo span{color:var(--t2);font-weight:400}
+.hdr-stats{
+  margin-left:auto;display:flex;gap:16px;
+  font-family:var(--mono);font-size:11px;color:var(--t2);
+}
+.hdr-stat b{color:var(--t0);font-weight:500}
+
+main{display:flex;flex:1;overflow:hidden}
+
+/* ── camera area ──────────────────────────────────────── */
+.cam-area{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  padding:16px;background:var(--s1);position:relative;
+  min-width:0;
+}
+.cam-wrap{
+  position:relative;
+  max-width:100%;max-height:100%;
+  border-radius:10px;overflow:hidden;
+  border:1px solid var(--bd);
+  background:#000;
+  box-shadow:0 8px 40px rgba(0,0,0,.5);
+}
+.cam-wrap img{
+  display:block;width:640px;height:480px;
+  max-width:100%;max-height:calc(100vh - 84px);
+  object-fit:contain;
+}
+.cam-wrap canvas{
+  position:absolute;top:0;left:0;
+  width:100%;height:100%;
+  cursor:crosshair;
+}
+/* flash effect */
+.cam-flash{
+  position:absolute;inset:0;background:#fff;
+  opacity:0;pointer-events:none;border-radius:10px;
+  transition:opacity 0s;
+}
+.cam-flash.fire{opacity:.6;transition:opacity 0s}
+.cam-flash.fade{opacity:0;transition:opacity .35s ease-out}
+/* cam offline */
+.cam-offline{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:8px;
+  color:var(--t2);font-family:var(--mono);font-size:12px;
+}
+.cam-offline .ico{font-size:32px;opacity:.3;animation:pulse 1.5s infinite alternate}
+@keyframes pulse{from{opacity:.15}to{opacity:.4}}
+
+/* ── controls sidebar ─────────────────────────────────── */
+.controls{
+  width:320px;flex-shrink:0;
+  display:flex;flex-direction:column;
+  border-left:1px solid var(--bd);
+  background:var(--bg);
+  overflow-y:auto;
+}
+.ctrl-section{
+  padding:16px 18px;
+  border-bottom:1px solid var(--bd);
+}
+.ctrl-title{
+  font-family:var(--mono);font-size:9px;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;
+  color:var(--t2);margin-bottom:10px;
+}
+
+/* ── label buttons ────────────────────────────────────── */
+.label-grid{display:flex;flex-direction:column;gap:6px}
+.label-btn{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;border-radius:8px;
+  border:1.5px solid var(--bd2);background:transparent;
+  cursor:pointer;transition:all .15s ease;
+  position:relative;overflow:hidden;
+}
+.label-btn:hover{border-color:rgba(255,255,255,.2);background:var(--s2)}
+.label-btn .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;transition:transform .2s var(--ease)}
+.label-btn .name{font-family:var(--head);font-size:14px;font-weight:500;color:var(--t0);flex:1}
+.label-btn .key{
+  font-family:var(--mono);font-size:9px;font-weight:500;
+  color:var(--t2);background:var(--s3);
+  padding:2px 6px;border-radius:3px;letter-spacing:.04em;
+}
+.label-btn .cnt{
+  font-family:var(--mono);font-size:13px;font-weight:500;
+  color:var(--t1);min-width:28px;text-align:right;
+}
+/* active states */
+.label-btn.plastic.on{border-color:var(--plastic-bd);background:var(--plastic-bg)}
+.label-btn.plastic.on .dot{transform:scale(1.3)}
+.label-btn.plastic .dot{background:var(--plastic)}
+.label-btn.metal.on{border-color:var(--metal-bd);background:var(--metal-bg)}
+.label-btn.metal.on .dot{transform:scale(1.3)}
+.label-btn.metal .dot{background:var(--metal)}
+.label-btn.glass.on{border-color:var(--glass-bd);background:var(--glass-bg)}
+.label-btn.glass.on .dot{transform:scale(1.3)}
+.label-btn.glass .dot{background:var(--glass)}
+
+/* ── crop slider ──────────────────────────────────────── */
+.slider-row{display:flex;align-items:center;gap:10px}
+.slider-row input[type=range]{
+  flex:1;-webkit-appearance:none;height:3px;
+  background:var(--s4);border-radius:2px;outline:none;cursor:pointer;
+}
+.slider-row input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;
+  border-radius:50%;background:var(--t0);cursor:pointer;
+  border:2px solid var(--bg);transition:transform .12s;
+}
+.slider-row input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2)}
+.slider-val{
+  font-family:var(--mono);font-size:12px;color:var(--t0);
+  min-width:36px;text-align:right;
+}
+
+/* ── preview ──────────────────────────────────────────── */
+.preview-box{
+  display:flex;align-items:center;gap:14px;
+}
+.preview-canvas{
+  width:96px;height:96px;border-radius:6px;
+  border:1px solid var(--bd2);background:var(--s2);
+  image-rendering:pixelated;flex-shrink:0;
+}
+.preview-info{
+  font-family:var(--mono);font-size:10px;color:var(--t2);
+  line-height:1.6;
+}
+.preview-info b{color:var(--t1);font-weight:500}
+
+/* ── capture button ───────────────────────────────────── */
+.capture-btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  width:100%;padding:14px;border-radius:10px;
+  border:none;cursor:pointer;
+  font-family:var(--head);font-size:15px;font-weight:600;
+  color:#000;background:var(--t0);
+  transition:all .12s ease;
+  letter-spacing:.02em;
+  position:relative;overflow:hidden;
+}
+.capture-btn:hover{background:#e4e4e7;transform:translateY(-1px);box-shadow:0 4px 20px rgba(255,255,255,.1)}
+.capture-btn:active{transform:scale(.97)}
+.capture-btn .shortcut{
+  font-family:var(--mono);font-size:9px;font-weight:500;
+  background:rgba(0,0,0,.1);padding:2px 7px;border-radius:3px;
+  color:rgba(0,0,0,.5);
+}
+.capture-btn.cooldown{opacity:.6;pointer-events:none}
+
+/* ── shortcuts ────────────────────────────────────────── */
+.shortcuts{
+  display:flex;gap:6px;flex-wrap:wrap;
+  font-family:var(--mono);font-size:9px;color:var(--t3);
+  padding:0 18px 12px;
+}
+.shortcuts kbd{
+  background:var(--s2);border:1px solid var(--bd);
+  padding:1px 5px;border-radius:3px;color:var(--t2);
+  font-family:var(--mono);font-size:9px;
+}
+
+/* ── gallery ──────────────────────────────────────────── */
+.gallery-section{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.gallery{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:4px;
+  overflow-y:auto;padding-top:4px;
+}
+.gallery-item{
+  position:relative;aspect-ratio:1;border-radius:4px;
+  overflow:hidden;cursor:pointer;
+  border:1px solid var(--bd);
+  transition:border-color .12s;
+}
+.gallery-item:hover{border-color:var(--bd2)}
+.gallery-item img{width:100%;height:100%;object-fit:cover;display:block}
+.gallery-item .del{
+  position:absolute;top:2px;right:2px;
+  width:16px;height:16px;border-radius:50%;
+  background:rgba(0,0,0,.7);color:var(--err);
+  font-size:10px;line-height:16px;text-align:center;
+  cursor:pointer;opacity:0;transition:opacity .12s;
+}
+.gallery-item:hover .del{opacity:1}
+.gallery-empty{
+  grid-column:1/-1;padding:20px;text-align:center;
+  font-family:var(--mono);font-size:10px;color:var(--t3);
+}
+
+/* ── toast ─────────────────────────────────────────────── */
+#toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(8px);z-index:999;
+  background:var(--s3);border:1px solid var(--bd2);border-radius:8px;
+  padding:10px 18px;font-family:var(--mono);font-size:12px;color:var(--t0);
+  opacity:0;transition:opacity .2s,transform .2s var(--ease);
+  pointer-events:none;white-space:nowrap;
+  box-shadow:0 8px 30px rgba(0,0,0,.4);
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.ok{border-color:rgba(52,211,153,.25)}
+#toast.err{border-color:rgba(248,113,113,.25);color:var(--err)}
+
+/* ── responsive ───────────────────────────────────────── */
+@media(max-width:800px){
+  main{flex-direction:column}
+  .controls{width:100%;flex-shrink:initial;max-height:50vh}
+  .cam-wrap img{width:100%;height:auto}
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+
+<!-- ═══════ HEADER ═══════ -->
+<header>
+  <div class="logo">DATASET <span>TOOL</span></div>
+  <div class="hdr-stats">
+    <span>Total: <b id="hdr-total">0</b></span>
+    <span>Augment: <b id="hdr-aug">×13</b></span>
+    <span>Output: <b>96×96</b></span>
+  </div>
+</header>
+
+<!-- ═══════ MAIN ═══════ -->
+<main>
+
+  <!-- Camera -->
+  <div class="cam-area">
+    <div class="cam-wrap" id="cam-wrap">
+      <img id="cam" alt="camera" crossorigin="anonymous">
+      <canvas id="overlay"></canvas>
+      <div class="cam-flash" id="cam-flash"></div>
+      <div class="cam-offline" id="cam-off">
+        <div class="ico">◼</div>
+        <div>Connecting to ESP32…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+
+    <!-- Label selection -->
+    <div class="ctrl-section">
+      <div class="ctrl-title">Select Label</div>
+      <div class="label-grid">
+        <button class="label-btn plastic on" data-label="plastic" onclick="setLabel('plastic')">
+          <div class="dot"></div>
+          <span class="name">Plastic</span>
+          <span class="key">1</span>
+          <span class="cnt" id="c-plastic">0</span>
+        </button>
+        <button class="label-btn metal" data-label="metal" onclick="setLabel('metal')">
+          <div class="dot"></div>
+          <span class="name">Metal</span>
+          <span class="key">2</span>
+          <span class="cnt" id="c-metal">0</span>
+        </button>
+        <button class="label-btn glass" data-label="glass" onclick="setLabel('glass')">
+          <div class="dot"></div>
+          <span class="name">Glass</span>
+          <span class="key">3</span>
+          <span class="cnt" id="c-glass">0</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Crop size -->
+    <div class="ctrl-section">
+      <div class="ctrl-title">Crop Region</div>
+      <div class="slider-row">
+        <input type="range" id="crop-slider" min="64" max="400" value="200"
+               oninput="cropSize=+this.value;document.getElementById('crop-val').textContent=this.value+'px';drawOverlay()">
+        <span class="slider-val" id="crop-val">200px</span>
+      </div>
+    </div>
+
+    <!-- Preview -->
+    <div class="ctrl-section">
+      <div class="ctrl-title">96×96 Preview</div>
+      <div class="preview-box">
+        <canvas id="preview" class="preview-canvas" width="96" height="96"></canvas>
+        <div class="preview-info">
+          Crop: <b id="prev-crop">200×200</b><br>
+          Center: <b id="prev-center">320, 240</b><br>
+          Scale: <b id="prev-scale">2.08×</b>
+        </div>
+      </div>
+    </div>
+
+    <!-- Capture -->
+    <div class="ctrl-section">
+      <button class="capture-btn" id="capture-btn" onclick="doCapture()">
+        📸 Capture + Augment
+        <span class="shortcut">Space</span>
+      </button>
+    </div>
+
+    <!-- Keyboard shortcuts -->
+    <div class="shortcuts">
+      <kbd>1</kbd> Plastic &nbsp;
+      <kbd>2</kbd> Metal &nbsp;
+      <kbd>3</kbd> Glass &nbsp;
+      <kbd>Space</kbd> Capture &nbsp;
+      <kbd>Drag</kbd> Move crop
+    </div>
+
+    <!-- Gallery -->
+    <div class="ctrl-section gallery-section">
+      <div class="ctrl-title">Recent — <span id="gal-label">plastic</span></div>
+      <div class="gallery" id="gallery">
+        <div class="gallery-empty">No images yet</div>
+      </div>
+    </div>
+
+  </div><!-- /controls -->
+
+</main>
+</div><!-- /app -->
+
+<div id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+const HOST = `${location.protocol}//${location.host}`;
+const CAM_W = 640, CAM_H = 480;
+const LABELS = ['plastic','metal','glass'];
+const LABEL_CLR = {plastic:'#f59e0b',metal:'#3b82f6',glass:'#a855f7'};
+
+let currentLabel = 'plastic';
+let cropCx = CAM_W / 2, cropCy = CAM_H / 2;
+let cropSize = 200;
+let dragging = false;
+let capturing = false;
+
+const cam       = document.getElementById('cam');
+const overlay   = document.getElementById('overlay');
+const ctx       = overlay.getContext('2d');
+const previewEl = document.getElementById('preview');
+const prevCtx   = previewEl.getContext('2d');
+const camOff    = document.getElementById('cam-off');
+
+/* ═══════════════════════════════════════════════════════════
+   CAMERA STREAM
+═══════════════════════════════════════════════════════════ */
+function startCam() {
+  cam.onload = () => {
+    camOff.style.display = 'none';
+    syncOverlay();
+  };
+  cam.onerror = () => {
+    camOff.style.display = 'flex';
+    setTimeout(startCam, 3000);
+  };
+  cam.src = `${HOST}/stream?t=${Date.now()}`;
+
+  // Polling fallback for MJPEG onload
+  let poll = setInterval(() => {
+    if (cam.naturalWidth > 0) {
+      camOff.style.display = 'none';
+      syncOverlay();
+      clearInterval(poll);
+    }
+  }, 500);
+  setTimeout(() => clearInterval(poll), 15000);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   OVERLAY & CROP
+═══════════════════════════════════════════════════════════ */
+function syncOverlay() {
+  const wrap = document.getElementById('cam-wrap');
+  const r = wrap.getBoundingClientRect();
+  overlay.width  = r.width;
+  overlay.height = r.height;
+  drawOverlay();
+}
+
+// Accurate mapping between display coords and camera pixels
+function getImgLayout() {
+  const wrap = document.getElementById('cam-wrap');
+  const r = wrap.getBoundingClientRect();
+  const dw = r.width, dh = r.height;
+
+  const natW = cam.naturalWidth || CAM_W;
+  const natH = cam.naturalHeight || CAM_H;
+  const imgRatio = natW / natH;
+  const boxRatio = dw / dh;
+
+  let rw, rh, ox, oy;
+  if (imgRatio > boxRatio) {
+    rw = dw; rh = dw / imgRatio;
+    ox = 0; oy = (dh - rh) / 2;
+  } else {
+    rh = dh; rw = dh * imgRatio;
+    ox = (dw - rw) / 2; oy = 0;
+  }
+  return { rw, rh, ox, oy, natW, natH };
+}
+
+function camToDisplay(cx, cy, size) {
+  const { rw, rh, ox, oy, natW, natH } = getImgLayout();
+  return {
+    x: ox + (cx / natW) * rw,
+    y: oy + (cy / natH) * rh,
+    s: (size / natW) * rw,
+  };
+}
+
+function displayToCam(mx, my) {
+  const { rw, rh, ox, oy, natW, natH } = getImgLayout();
+  const rx = mx - ox, ry = my - oy;
+  return {
+    x: Math.round(Math.max(0, Math.min(natW, (rx / rw) * natW))),
+    y: Math.round(Math.max(0, Math.min(natH, (ry / rh) * natH))),
+  };
+}
+
+function drawOverlay() {
+  const W = overlay.width, H = overlay.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!W || !H) return;
+
+  const clr = LABEL_CLR[currentLabel] || '#fff';
+  const d = camToDisplay(cropCx, cropCy, cropSize);
+  const half = d.s / 2;
+
+  // Dim outside
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.clearRect(d.x - half, d.y - half, d.s, d.s);
+
+  // Border
+  ctx.strokeStyle = clr;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(d.x - half, d.y - half, d.s, d.s);
+  ctx.setLineDash([]);
+
+  // Corner brackets
+  const bk = Math.min(14, d.s / 4);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = clr;
+  [[d.x-half,d.y-half,1,1],[d.x+half,d.y-half,-1,1],
+   [d.x-half,d.y+half,1,-1],[d.x+half,d.y+half,-1,-1]].forEach(([cx,cy,dx,dy])=>{
+    ctx.beginPath();
+    ctx.moveTo(cx+dx*bk,cy); ctx.lineTo(cx,cy); ctx.lineTo(cx,cy+dy*bk);
+    ctx.stroke();
+  });
+
+  // Crosshair
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(d.x-8,d.y); ctx.lineTo(d.x+8,d.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(d.x,d.y-8); ctx.lineTo(d.x,d.y+8); ctx.stroke();
+
+  // Size label
+  ctx.font = '10px JetBrains Mono, monospace';
+  ctx.fillStyle = clr;
+  ctx.textAlign = 'center';
+  ctx.fillText(`${cropSize}×${cropSize}`, d.x, d.y - half - 6);
+
+  // Update info
+  document.getElementById('prev-crop').textContent = `${cropSize}×${cropSize}`;
+  document.getElementById('prev-center').textContent = `${cropCx}, ${cropCy}`;
+  document.getElementById('prev-scale').textContent = `${(cropSize/96).toFixed(2)}×`;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   REAL-TIME 96×96 PREVIEW
+═══════════════════════════════════════════════════════════ */
+setInterval(() => {
+  if (cam.naturalWidth === 0) return;
+  try {
+    const natW = cam.naturalWidth || CAM_W;
+    const natH = cam.naturalHeight || CAM_H;
+    const half = cropSize / 2;
+    const sx = Math.max(0, cropCx - half);
+    const sy = Math.max(0, cropCy - half);
+    const sw = Math.min(cropSize, natW - sx);
+    const sh = Math.min(cropSize, natH - sy);
+    prevCtx.imageSmoothingEnabled = true;
+    prevCtx.imageSmoothingQuality = 'high';
+    prevCtx.drawImage(cam, sx, sy, sw, sh, 0, 0, 96, 96);
+  } catch(e) { /* CORS or not-loaded — ignore */ }
+}, 100);
+
+/* ═══════════════════════════════════════════════════════════
+   DRAG INTERACTION
+═══════════════════════════════════════════════════════════ */
+function getPointerPos(e) {
+  const r = overlay.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return { mx: clientX - r.left, my: clientY - r.top };
+}
+
+overlay.addEventListener('mousedown', e => {
+  dragging = true;
+  const { mx, my } = getPointerPos(e);
+  const c = displayToCam(mx, my);
+  cropCx = c.x; cropCy = c.y;
+  clampCrop();
+  drawOverlay();
+});
+
+overlay.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const { mx, my } = getPointerPos(e);
+  const c = displayToCam(mx, my);
+  cropCx = c.x; cropCy = c.y;
+  clampCrop();
+  drawOverlay();
+});
+
+window.addEventListener('mouseup', () => { dragging = false; });
+
+// Touch support
+overlay.addEventListener('touchstart', e => {
+  e.preventDefault();
+  dragging = true;
+  const { mx, my } = getPointerPos(e);
+  const c = displayToCam(mx, my);
+  cropCx = c.x; cropCy = c.y;
+  clampCrop(); drawOverlay();
+}, { passive: false });
+
+overlay.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!dragging) return;
+  const { mx, my } = getPointerPos(e);
+  const c = displayToCam(mx, my);
+  cropCx = c.x; cropCy = c.y;
+  clampCrop(); drawOverlay();
+}, { passive: false });
+
+window.addEventListener('touchend', () => { dragging = false; });
+
+function clampCrop() {
+  const natW = cam.naturalWidth || CAM_W;
+  const natH = cam.naturalHeight || CAM_H;
+  const half = cropSize / 2;
+  cropCx = Math.max(half, Math.min(natW - half, cropCx));
+  cropCy = Math.max(half, Math.min(natH - half, cropCy));
+}
+
+// Resize observer
+new ResizeObserver(syncOverlay).observe(document.getElementById('cam-wrap'));
+
+/* ═══════════════════════════════════════════════════════════
+   LABEL SELECTION
+═══════════════════════════════════════════════════════════ */
+function setLabel(label) {
+  currentLabel = label;
+  document.querySelectorAll('.label-btn').forEach(b => {
+    b.classList.toggle('on', b.dataset.label === label);
+  });
+  document.getElementById('gal-label').textContent = label;
+  drawOverlay();
+  loadGallery(label);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CAPTURE
+═══════════════════════════════════════════════════════════ */
+async function doCapture() {
+  if (capturing) return;
+  capturing = true;
+  const btn = document.getElementById('capture-btn');
+  btn.classList.add('cooldown');
+
+  // Flash effect
+  const flash = document.getElementById('cam-flash');
+  flash.classList.remove('fade');
+  flash.classList.add('fire');
+  setTimeout(() => { flash.classList.remove('fire'); flash.classList.add('fade'); }, 60);
+
+  try {
+    const resp = await fetch(`${HOST}/capture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        label: currentLabel,
+        cx: Math.round(cropCx),
+        cy: Math.round(cropCy),
+        size: cropSize,
+      }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      updateCounts(data.counts);
+      // Prepend to gallery
+      prependGalleryItem(data.label, data.filename, data.thumbnail);
+      toast(`✓ ${data.label} — ${data.saved_count} images saved (1 + ${data.saved_count - 1} aug)`, true);
+    } else {
+      toast(`✗ ${data.error || 'Capture failed'}`, false);
+    }
+  } catch (e) {
+    toast(`✗ ${e.message}`, false);
+  }
+
+  setTimeout(() => {
+    btn.classList.remove('cooldown');
+    capturing = false;
+  }, 300);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GALLERY
+═══════════════════════════════════════════════════════════ */
+async function loadGallery(label) {
+  try {
+    const resp = await fetch(`${HOST}/gallery/${label}?limit=24`);
+    const data = await resp.json();
+    const gal = document.getElementById('gallery');
+    if (!data.items || data.items.length === 0) {
+      gal.innerHTML = '<div class="gallery-empty">No images yet</div>';
+      return;
+    }
+    gal.innerHTML = data.items.map(it =>
+      `<div class="gallery-item" data-name="${it.name}" data-label="${label}">
+         <img src="${it.src}" alt="${it.name}">
+         <div class="del" onclick="deleteImg(event,'${label}','${it.name}')">✕</div>
+       </div>`
+    ).join('');
+  } catch (e) {
+    console.warn('Gallery load error:', e);
+  }
+}
+
+function prependGalleryItem(label, filename, thumbnail) {
+  if (label !== currentLabel) return;
+  const gal = document.getElementById('gallery');
+  // Remove "No images yet"
+  const empty = gal.querySelector('.gallery-empty');
+  if (empty) empty.remove();
+  // Create item
+  const div = document.createElement('div');
+  div.className = 'gallery-item';
+  div.dataset.name = filename;
+  div.dataset.label = label;
+  div.innerHTML = `<img src="${thumbnail}" alt="${filename}">
+    <div class="del" onclick="deleteImg(event,'${label}','${filename}')">✕</div>`;
+  div.style.animation = 'fadeIn .3s ease';
+  gal.prepend(div);
+  // Keep max 24
+  while (gal.children.length > 24) gal.lastChild.remove();
+}
+
+async function deleteImg(e, label, filename) {
+  e.stopPropagation();
+  try {
+    const resp = await fetch(`${HOST}/image/${label}/${filename}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (data.success) {
+      updateCounts(data.counts);
+      // Remove from gallery
+      const item = document.querySelector(`.gallery-item[data-name="${filename}"]`);
+      if (item) item.remove();
+      toast(`Deleted ${filename}`, true);
+    }
+  } catch (e) {
+    toast('Delete failed', false);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   STATS
+═══════════════════════════════════════════════════════════ */
+function updateCounts(counts) {
+  let total = 0;
+  LABELS.forEach(l => {
+    const n = counts[l] || 0;
+    document.getElementById(`c-${l}`).textContent = n;
+    total += n;
+  });
+  document.getElementById('hdr-total').textContent = total;
+}
+
+async function loadStats() {
+  try {
+    const resp = await fetch(`${HOST}/stats`);
+    const data = await resp.json();
+    updateCounts(data.counts);
+    if (data.aug_mult) document.getElementById('hdr-aug').textContent = `×${data.aug_mult}`;
+  } catch (e) {}
+}
+
+/* ═══════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+═══════════════════════════════════════════════════════════ */
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  switch (e.key) {
+    case '1': setLabel('plastic'); break;
+    case '2': setLabel('metal'); break;
+    case '3': setLabel('glass'); break;
+    case ' ':
+      e.preventDefault();
+      doCapture();
+      break;
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════════════════ */
+let _tt;
+function toast(msg, ok = true) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${ok ? 'ok' : 'err'}`;
+  clearTimeout(_tt);
+  _tt = setTimeout(() => el.className = '', 2500);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════ */
+startCam();
+loadStats();
+loadGallery('plastic');
+syncOverlay();
+</script>
+</body>
+</html>

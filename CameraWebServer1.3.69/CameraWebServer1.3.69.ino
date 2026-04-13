@@ -65,13 +65,13 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 17000000;
-  config.frame_size = FRAMESIZE_UXGA;
+  config.xclk_freq_hz = 20000000;
+  config.frame_size = FRAMESIZE_VGA;
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 12;
+  config.jpeg_quality = 4;
   config.fb_count = 1;
   
   // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
@@ -109,13 +109,34 @@ void setup() {
   sensor_t * s = esp_camera_sensor_get();
   // initial sensors are flipped vertically and colors are a bit saturated
   if (s->id.PID == OV3660_PID) {
-    s->set_vflip(s, 1); // flip it back
+    s->set_vflip(s, 0); // flip it back
     s->set_brightness(s, 1); // up the brightness just a bit
     s->set_saturation(s, -2); // lower the saturation
   }
-  // drop down frame size for higher initial frame rate
+
+  // AI Thinker ESP32-CAM: OV2640 is mounted upside-down on PCB
+  // → flip + mirror to correct orientation
+#if defined(CAMERA_MODEL_AI_THINKER)
+  s->set_vflip(s, 1);
+  s->set_hmirror(s, 1);
+#endif
+
+  // ── Sensor tuning for ML-quality images ─────────────────────
+  s->set_contrast(s, 2);        // Max contrast → sharper details
+  s->set_saturation(s, -2);     // Reduce colour noise
+  s->set_brightness(s, 1);      // Slightly brighter
+  s->set_whitebal(s, 1);        // Auto white balance ON
+  s->set_awb_gain(s, 1);        // AWB gain ON
+  s->set_aec2(s, 1);            // Auto exposure (DSP) ON
+  s->set_bpc(s, 1);             // Black pixel correction ON
+  s->set_wpc(s, 1);             // White pixel correction ON
+  s->set_raw_gma(s, 1);         // Gamma correction ON
+  s->set_lenc(s, 1);            // Lens correction ON
+  s->set_gainceiling(s, (gainceiling_t)GAINCEILING_4X);  // Limit gain → less noise
+
+  // Set initial streaming frame size
   if(config.pixel_format == PIXFORMAT_JPEG){
-    s->set_framesize(s, FRAMESIZE_QVGA);
+    s->set_framesize(s, FRAMESIZE_VGA);  // 640x480 — good balance for SmartBin
   }
 
 #if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
