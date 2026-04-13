@@ -233,8 +233,17 @@ def initialize_models() -> None:
     g_state.classifier_interpreter = load_tflite_model(Config.CLASSIFIER_MODEL_PATH)
     input_detail  = g_state.classifier_interpreter.get_input_details()[0]
     output_detail = g_state.classifier_interpreter.get_output_details()[0]
-    input_h, input_w = get_image_size_from_shape(input_detail["shape"])
-    scale, zp = _extract_quant_params(input_detail)
+    shape = input_detail.get("shape", [])
+    input_h = int(shape[1]) if len(shape) > 1 else 224
+    input_w = int(shape[2]) if len(shape) > 2 else 224
+
+    quant = input_detail.get("quantization", (0.0, 0))
+    try:
+        scale = float(quant[0] if isinstance(quant[0], (int, float)) else quant[0][0])
+        zp = int(quant[1] if isinstance(quant[1], (int, float)) else quant[1][0])
+    except Exception:
+        scale, zp = 0.0, 0
+
     logger.info(
         "Classifier loaded. Input: %dx%d  dtype=%s  quant=(scale=%.6f, zp=%d)  "
         "Output shape: %s",
@@ -309,9 +318,11 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
         img_resized = cv2.resize(img, (224, 224)) 
         img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
         
-        # Teachable Machine normalization
-        img_final = (img_rgb.astype(np.float32) / 127.5) - 1.0
-        img_final = np.expand_dims(img_final, 0)
+        image_array = np.asarray(img_rgb)
+        
+        # Normalize the image
+        normalized_image_array = (image_array.astype(np.float32) / 127.5) - 1.0
+        img_final = np.expand_dims(normalized_image_array, 0)
         
         interpreter.set_tensor(input_details[0]['index'], img_final)
         interpreter.invoke()

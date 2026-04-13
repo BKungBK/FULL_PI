@@ -41,6 +41,7 @@ from typing import Optional
 
 import httpx
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -53,7 +54,16 @@ logger = logging.getLogger("SmartBin.Server")
 # =====================================================================
 # FastAPI app
 # =====================================================================
-app = FastAPI(title="SmartBin V2 API", version="2.0")
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    # Startup tasks
+    global _server_loop
+    _server_loop = asyncio.get_running_loop()
+    asyncio.create_task(_bin_push_loop())
+    yield
+    # Shutdown tasks (if any)
+
+app = FastAPI(title="SmartBin V2 API", version="2.0", lifespan=app_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -559,11 +569,6 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 # =====================================================================
 
 
-@app.on_event("startup")
-async def _on_startup() -> None:
-    asyncio.create_task(_bin_push_loop())
-
-
 async def _bin_push_loop() -> None:
     while True:
         await asyncio.sleep(2)
@@ -617,14 +622,6 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    # Update _server_loop so sort callbacks can schedule broadcasts
-    async def _set_loop():
-        global _server_loop
-        _server_loop = asyncio.get_running_loop()
-
-    @app.on_event("startup")
-    async def _capture_loop():
-        global _server_loop
-        _server_loop = asyncio.get_running_loop()
-
+    # The lifespan context manager now handles getting the running loop.
+    
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
