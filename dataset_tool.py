@@ -1,12 +1,12 @@
 """
 dataset_tool.py — SmartBin Dataset Collection Tool
 ====================================================
-Captures images from ESP32-CAM, crops, resizes to 96×96,
+Captures images from ESP32-CAM, crops, resizes to 224×224,
 applies CLAHE post-processing, and generates 12 augmented
 variants per capture for robust ML training.
 
 Pipeline per capture:
-    ESP32 VGA frame → crop ROI → resize 96×96 (INTER_AREA)
+    ESP32 VGA frame → crop ROI → resize 224×224 (INTER_AREA)
     → CLAHE enhancement → save original + 12 augmentations
 
 Run:    python dataset_tool.py
@@ -14,9 +14,9 @@ Open:   http://localhost:8001
 
 Output:
     dataset/
-    ├── plastic/   (*.jpg, 96×96)
-    ├── metal/     (*.jpg, 96×96)
-    └── glass/     (*.jpg, 96×96)
+    ├── plastic/   (*.jpg, 224×224)
+    ├── metal/     (*.jpg, 224×224)
+    └── glass/     (*.jpg, 224×224)
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from pydantic import BaseModel
 ESP32_IP    = os.environ.get("ESP32_IP", "10.42.0.177")
 DATASET_DIR = Path(__file__).parent / "dataset"
 LABELS      = ("plastic", "metal", "glass")
-OUTPUT_SIZE = 96
+OUTPUT_SIZE = 224
 PORT        = 8001
 AUGMENT_ENABLED = True   # False = save originals only
 
@@ -76,7 +76,7 @@ def postprocess(img: np.ndarray) -> np.ndarray:
 
 
 def augment(img: np.ndarray) -> List[Tuple[str, np.ndarray]]:
-    """Generate 12 augmented versions of a 96×96 image.
+    """Generate 12 augmented versions of a 224×224 image.
 
     Covers geometric, photometric, noise, and colour transforms
     to build a robust and diverse training set.
@@ -205,7 +205,7 @@ class CaptureBody(BaseModel):
 
 @app.post("/capture")
 async def capture(body: CaptureBody):
-    """Grab frame → crop → resize 96×96 → CLAHE → save + augment."""
+    """Grab frame → crop → resize 224×224 → CLAHE → save + augment."""
     if body.label not in LABELS:
         return JSONResponse({"error": f"Invalid label: {body.label}"}, 400)
 
@@ -258,7 +258,7 @@ async def capture(body: CaptureBody):
     if crop.size == 0:
         return JSONResponse({"error": "Empty crop region"}, 500)
 
-    # ── 6. Resize to 96×96 ────────────────────────────────────
+    # ── 6. Resize to 224×224 ────────────────────────────────────
     resized = cv2.resize(
         crop, (OUTPUT_SIZE, OUTPUT_SIZE), interpolation=cv2.INTER_AREA
     )

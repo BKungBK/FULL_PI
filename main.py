@@ -594,7 +594,7 @@ def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
     x1, y1, x2, y2 = bbox
 
     # 2. Convert rectangular bbox to a SQUARE crop to prevent aspect-ratio distortion
-    #    This ensures inference perfectly matches the 96x96 squared dataset training images.
+    #    This ensures inference perfectly matches the 224x224 squared dataset training images.
     cx = (x1 + x2) // 2
     cy = (y1 + y2) // 2
     w = x2 - x1

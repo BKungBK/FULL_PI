@@ -281,7 +281,7 @@ main{display:flex;flex:1;overflow:hidden}
   <div class="hdr-stats">
     <span>Total: <b id="hdr-total">0</b></span>
     <span>Augment: <b id="hdr-aug">×13</b></span>
-    <span>Output: <b>96×96</b></span>
+    <span>Output: <b>224×224</b></span>
   </div>
 </header>
 
@@ -351,9 +351,9 @@ main{display:flex;flex:1;overflow:hidden}
 
     <!-- Preview -->
     <div class="ctrl-section">
-      <div class="ctrl-title">96×96 Preview</div>
+      <div class="ctrl-title">224×224 Preview</div>
       <div class="preview-box">
-        <canvas id="preview" class="preview-canvas" width="96" height="96"></canvas>
+        <canvas id="preview" class="preview-canvas" width="224" height="224"></canvas>
         <div class="preview-info">
           Crop: <b id="prev-crop">200×200</b><br>
           Center: <b id="prev-center">320, 240</b><br>
@@ -541,11 +541,11 @@ function drawOverlay() {
   // Update info
   document.getElementById('prev-crop').textContent = `${cropSize}×${cropSize}`;
   document.getElementById('prev-center').textContent = `${cropCx}, ${cropCy}`;
-  document.getElementById('prev-scale').textContent = `${(cropSize/96).toFixed(2)}×`;
+  document.getElementById('prev-scale').textContent = `${(cropSize/224).toFixed(2)}×`;
 }
 
 /* ═══════════════════════════════════════════════════════════
-   REAL-TIME 96×96 PREVIEW
+   REAL-TIME 224×224 PREVIEW
 ═══════════════════════════════════════════════════════════ */
 setInterval(() => {
   if (cam.naturalWidth === 0) return;
@@ -559,7 +559,7 @@ setInterval(() => {
     const sh = Math.min(cropSize, natH - sy);
     prevCtx.imageSmoothingEnabled = true;
     prevCtx.imageSmoothingQuality = 'high';
-    prevCtx.drawImage(cam, sx, sy, sw, sh, 0, 0, 96, 96);
+    prevCtx.drawImage(cam, sx, sy, sw, sh, 0, 0, 224, 224);
   } catch(e) { /* CORS or not-loaded — ignore */ }
 }, 100);
 
