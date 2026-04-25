@@ -62,7 +62,15 @@ async def app_lifespan(app: FastAPI):
     asyncio.create_task(_bin_push_loop())
     _start_engine_thread()
     yield
-    # Shutdown tasks (if any)
+    # ── Graceful shutdown: release GPIO before process exits ───────
+    logger.info("Server shutting down — stopping engine…")
+    _stop_engine_thread()
+    # Wait for engine thread to finish GPIO cleanup (max 10s)
+    if _engine_thread is not None:
+        _engine_thread.join(timeout=10.0)
+        if _engine_thread.is_alive():
+            logger.warning("Engine thread did not exit within 10s")
+    logger.info("Shutdown complete")
 
 app = FastAPI(title="SmartBin V2 API", version="2.0", lifespan=app_lifespan)
 
@@ -113,10 +121,11 @@ def _start_engine_thread() -> tuple[bool, str]:
                 engine.run()
             except Exception as exc:
                 import traceback
-                logger.error("Engine error:\n%s", traceback.format_exc())
+                logger.error("Engine crashed — systemd will restart:\n%s", traceback.format_exc())
             finally:
                 _engine_ref = None
                 system_state.update(engine_running=False)
+                logger.warning("Engine thread exited. Waiting for systemd restart...")
 
         _engine_thread = threading.Thread(
             target=_run, daemon=True, name="EngineThread")

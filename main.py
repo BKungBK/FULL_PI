@@ -80,7 +80,13 @@ class Config:
     """All tunable constants in one place. Edit here only."""
 
     # ── ESP32-CAM ─────────────────────────────────────────────────────
-    ESP32_IP_OVERRIDE: Optional[str] = "10.42.0.177"   # None → auto-scan
+    # ESP32 IP configuration:
+    # - If Pi is a Wi-Fi hotspot (recommended for production): keep the hardcoded IP.
+    #   The Pi's hotspot DHCP will always assign the same /24 range.
+    #   Verify the ESP32's assigned IP with: cat /var/lib/misc/dnsmasq.leases
+    # - If using a home router: set DHCP reservation on the router for ESP32's MAC,
+    #   then update this value to match. Or set to None to auto-scan (slower boot).
+    ESP32_IP_OVERRIDE: Optional[str] = "10.42.0.177"
     ESP32_STREAM_PORT: int = 81
     ESP32_CONTROL_PORT: int = 80
     ESP32_SCAN_TIMEOUT: float = 0.5
@@ -128,6 +134,7 @@ class Config:
     MIN_CONFIDENCE_THRESHOLD: float = 0.50     # minimum score before reject
     CAMERA_RECONNECT_DELAY: float = 1.0
     ULTRASONIC_TIMEOUT: float = 0.1
+    YOLO_INPUT_SIZE: int = 640  # reserved for future NCNN YOLO pipeline
     CAMERA_BUFFER_SIZE: int = 10  # rolling frame buffer depth
 
     # ── Derived URL helpers ───────────────────────────────────────────
@@ -260,8 +267,23 @@ def initialize_models() -> None:
 # 6. AI INFERENCE FUNCTIONS  (verbatim from spec)
 # =====================================================================
 
+# ── NCNN YOLO (reserved for future use) ──────────────────────────────
+
+@dataclass
+class LetterboxInfo:
+    scale: float
+    pad_left: int
+    pad_top: int
+    orig_h: int
+    orig_w: int
+
+
 def preprocess_yolo(frame: np.ndarray) -> Tuple[np.ndarray, LetterboxInfo]:
-    """Preprocess frame for YOLO NCNN input (letterbox resize, RGB CHW float32)."""
+    """Preprocess frame for YOLO NCNN input (letterbox resize, RGB CHW float32).
+
+    NOTE: This function is reserved for future NCNN pipeline integration.
+    The current detection pipeline uses classify_single_frame() → TFLite only.
+    """
     h, w = frame.shape[:2]
     size = Config.YOLO_INPUT_SIZE
 
@@ -719,6 +741,7 @@ class SmartBinEngine:
 
     def __init__(self) -> None:
         self._running  = False
+        self._mode     = "auto"    # "auto" | "manual" — mirrors shared_state
         self._hw:  Optional[HardwareController] = None
         self._cam: Optional[CameraStream] = None
         self._esp32_ip: str = ""
@@ -773,6 +796,23 @@ class SmartBinEngine:
         self._hw.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
         time.sleep(1)
         self._hw.idle_servos()
+
+        # ── SIGTERM handler for systemd graceful shutdown ──────────────────
+        try:
+            import signal as _signal
+
+            def _sigterm_handler(sig, frame):
+                logger.info("SIGTERM received — initiating graceful shutdown")
+                self._running = False
+
+            _signal.signal(_signal.SIGTERM, _sigterm_handler)
+            logger.info("SIGTERM handler registered")
+        except ValueError:
+            # signal.signal() only works in the main thread.
+            # When running via server.py (EngineThread), shutdown is handled
+            # by FastAPI lifespan cleanup instead.
+            logger.info("SIGTERM handler skipped (background thread — "
+                        "server lifespan handles shutdown)")
 
         # Camera
         stream_url = Config.stream_url(self._esp32_ip)
@@ -838,7 +878,7 @@ class SmartBinEngine:
                 cooldown_ok  = (now - last_cooldown_end) > Config.COOLDOWN_SECONDS
                 is_full      = full_bin is not None
 
-                if not is_full and cooldown_ok and state == DetectionState.IDLE:
+                if self._mode == "auto" and not is_full and cooldown_ok and state == DetectionState.IDLE:
                     if dist_main < Config.DETECT_DISTANCE_CM:
                         if hand_present_start_time == 0.0:
                             hand_present_start_time = now
@@ -851,8 +891,12 @@ class SmartBinEngine:
                 elif state == DetectionState.HAND_PRESENT:
                     # Clear timer once we move out of IDLE
                     hand_present_start_time = 0.0
-                    
-                    if dist_main > Config.HAND_WITHDRAWN_DISTANCE_CM:
+
+                    if self._mode != "auto":
+                        # Mode switched to manual while hand was present
+                        state = DetectionState.IDLE
+                        logger.info("Mode → manual — aborting detection")
+                    elif dist_main > Config.HAND_WITHDRAWN_DISTANCE_CM:
                         state = DetectionState.PROCESSING
                         logger.info("Hand withdrawn — starting pipeline")
                         self._process_detection()
@@ -860,9 +904,14 @@ class SmartBinEngine:
                         state = DetectionState.COOLDOWN
                         if system_state:
                             system_state.update(detection_state="cooldown")
-                        time.sleep(Config.COOLDOWN_SECONDS)
+                        # ── Interruptible cooldown (responds to SIGTERM/stop ≤100ms) ──
+                        cooldown_deadline = time.monotonic() + Config.COOLDOWN_SECONDS
+                        while self._running and time.monotonic() < cooldown_deadline:
+                            time.sleep(0.1)
                         state = DetectionState.IDLE
 
+                # ── Yield CPU to prevent 100% burn in idle (20ms ≈ 50 Hz) ──
+                time.sleep(0.02)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -899,8 +948,11 @@ class SmartBinEngine:
         elif action == "flash":
             self._send_flash(on=bool(cmd.get("on", False)))
         elif action == "mode":
+            new_mode = cmd.get("mode", "auto")
+            self._mode = new_mode
             if system_state:
-                system_state.update(mode=cmd.get("mode", "auto"))
+                system_state.update(mode=new_mode)
+            logger.info("Mode changed to: %s", new_mode)
         elif action == "set_roi":
             Config.ROI_CENTER_X = int(cmd.get("cx", 320))
             Config.ROI_CENTER_Y = int(cmd.get("cy", 240))
@@ -916,20 +968,21 @@ class SmartBinEngine:
             cls = cmd.get("class", "reject")
             logger.info("Manual sort triggered: %s", cls)
             target = self._label_to_angle(cls)
-            
-            # Serve 2 (Sort): Slow and steady to stop swaying
-            hw.smooth_move(Config.SERVO2_PIN, target, speed=30.0) 
-            time.sleep(0.3)
-            
-            # Servo 1 (Capture): Needs high speed for torque/lifting power
-            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=60.0)
-            time.sleep(0.5)
-            
-            # Reset both back to Home
-            hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=50.0)
-            hw.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=35.0)
-            time.sleep(0.2)
-            hw.idle_servos()
+            try:
+                # Servo 2 (Sort): Slow and steady to stop swaying
+                hw.smooth_move(Config.SERVO2_PIN, target, speed=30.0)
+                time.sleep(0.3)
+                # Servo 1 (Capture): Needs high speed for torque/lifting power
+                hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=60.0)
+                time.sleep(0.5)
+            except Exception as exc:
+                logger.error("Manual sort servo error: %s", exc)
+            finally:
+                # ALWAYS reset servos to Home — prevents stuck at non-home angle
+                hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=50.0)
+                hw.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=35.0)
+                time.sleep(0.2)
+                hw.idle_servos()
             if system_state:
                 system_state.add_sort_event(cls, 1.0, 0.0)
 
@@ -1065,14 +1118,16 @@ class SmartBinEngine:
         return preview
 
     def shutdown(self) -> None:
-        """Release all resources gracefully."""
+        """Release all resources gracefully. Safe to call multiple times."""
         self._running = False
         if system_state:
             system_state.update(engine_running=False, detection_state="idle")
         if self._cam:
             self._cam.stop()
+            self._cam = None
         if self._hw:
             self._hw.cleanup()
+            self._hw = None
         if self._cv2_ok:
             try:
                 cv2.destroyAllWindows()
