@@ -132,10 +132,21 @@ class Config:
     BIN_FULL_DISTANCE_CM: float = 10.0
     COOLDOWN_SECONDS: float = 5.0
     MIN_CONFIDENCE_THRESHOLD: float = 0.50     # minimum score before reject
+    UNCERTAINTY_REJECT_THRESHOLD: float = 0.30  # if 2+ classes exceed this → reject
     CAMERA_RECONNECT_DELAY: float = 1.0
     ULTRASONIC_TIMEOUT: float = 0.1
     YOLO_INPUT_SIZE: int = 640  # reserved for future NCNN YOLO pipeline
     CAMERA_BUFFER_SIZE: int = 10  # rolling frame buffer depth
+
+    # ── Servo timing (seconds) ───────────────────────────────────────
+    SERVO_UPDATE_HZ: float = 50.0            # match PWM period (20 ms)
+    SERVO_SETTLE_TIME_S: float = 0.20        # post-move mechanical damping
+    SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
+    PHOTO_SETTLE_DELAY: float = 0.25         # wait after servo reaches PHOTO_ANGLE
+    FLASH_SETTLE_DELAY: float = 0.20         # wait after flash ON before capture
+
+    # ── Reject bin servo angle ───────────────────────────────────────
+    REJECT_SERVO_ANGLE: int = 86   # default = SORT_HOME_ANGLE; set to 4th bin angle if hardware supports
 
     # ── Derived URL helpers ───────────────────────────────────────────
     @classmethod
@@ -362,17 +373,28 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
         output = interpreter.get_tensor(output_details[0]['index'])[0]
         idx = int(np.argmax(output))
         conf = float(output[idx])
-        
-        # reject คือน้อยกว่าค่าที่ตั้งไว้ทั้งหมด
+
+        # Tier 1 — absolute low confidence
         if conf < Config.MIN_CONFIDENCE_THRESHOLD:
+            logger.info("Softmax %s | top=%s %.3f → Tier-1 reject (low conf)",
+                        np.round(output, 3).tolist(),
+                        Config.CLASS_NAMES[idx] if idx < len(Config.CLASS_NAMES) else "?", conf)
             return "reject", conf
-            
+
+        # Tier 2 — model is confused between multiple classes
+        ambiguous_count = int(np.sum(output >= Config.UNCERTAINTY_REJECT_THRESHOLD))
+        if ambiguous_count >= 2:
+            top_name = Config.CLASS_NAMES[idx] if idx < len(Config.CLASS_NAMES) else "?"
+            logger.info("Softmax %s | top=%s %.3f | ambiguous=%d → Tier-2 reject (confused)",
+                        np.round(output, 3).tolist(), top_name, conf, ambiguous_count)
+            return "reject", conf
+
         class_name_raw = (
             Config.CLASS_NAMES[idx]
             if idx < len(Config.CLASS_NAMES)
             else "reject"
         )
-        
+
         # Normalize class name for UI tracking + color matching
         ll = class_name_raw.lower()
         if "plastic" in ll or "pet" in ll or "hdpe" in ll:
@@ -383,7 +405,10 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
             class_name = "glass"
         else:
             class_name = "reject"
-            
+
+        logger.info("Softmax %s | top=%s %.3f | ambiguous=%d → %s",
+                    np.round(output, 3).tolist(),
+                    class_name_raw, conf, ambiguous_count, class_name)
         return class_name, conf
     except Exception as e:
         logger.error("Predict error: %s", e)
@@ -558,46 +583,60 @@ class HardwareController:
         target: float,
         speed: float = 30.0,
     ) -> None:
-        """Interpolate servo using a Delta-Time loop and Quartic Easing."""
+        """Interpolate servo using a Delta-Time loop and Quartic Easing.
+
+        Updates at 50 Hz (matches PWM period) with 1-degree quantisation
+        to eliminate micro-jitter. After reaching target we sleep
+        SERVO_SETTLE_TIME_S so the horn mechanically damps out.
+        """
         home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
         start = self._last_angle.get(pin, home_angle)
-        
-        # ตัดทศนิยมเป้าหมายให้เป็นจำนวนเต็มเพื่อไม่ให้มีเศษ
+
         target = float(round(target))
         distance = abs(target - start)
-        
+
         if distance < 1.0:
             self.move_servo(pin, target)
+            time.sleep(Config.SERVO_SETTLE_TIME_S)
             return
 
         duration = distance / speed
         duration = max(0.15, duration)
 
+        dt = 1.0 / Config.SERVO_UPDATE_HZ   # 20 ms
         start_time = time.monotonic()
-        
+
         while True:
             elapsed = time.monotonic() - start_time
-            t = elapsed / duration
-            
+            t = min(1.0, elapsed / duration)
+
             if t >= 1.0:
                 self.move_servo(pin, target)
                 break
-                
+
             if t < 0.5:
                 eased_t = 8.0 * (t ** 4)
             else:
                 p = (-2.0 * t) + 2.0
                 eased_t = 1.0 - ((p ** 4) / 2.0)
-                
+
             current = start + (target - start) * eased_t
-            
-            # แจ้งแก้: เมื่อระยะเหลือ < 1.0 องศา (เหลือเป็น 0.xxx) ให้ตัดเศษและเข้าเป้าเลย ป้องกันเซอร์โวสั่นกึกๆ
+
+            # Snap to target once we are within 1 degree
             if abs(target - current) < 1.0:
                 self.move_servo(pin, target)
                 break
-                
-            self.move_servo(pin, current)
-            time.sleep(0.005)
+
+            # Quantise to 1 degree — servo cannot resolve finer than this anyway
+            self.move_servo(pin, round(current))
+            time.sleep(dt)
+
+        # Mechanical settle — horn damps overshoot / ringing
+        time.sleep(Config.SERVO_SETTLE_TIME_S)
+        logger.debug(
+            "Servo pin=%d target=%.0f° start=%.0f° duration=%.2fs",
+            pin, target, start, time.monotonic() - start_time
+        )
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat. 
@@ -960,10 +999,16 @@ class SmartBinEngine:
             self._save_roi_config()
             logger.info("ROI updated & saved: cx=%d cy=%d size=%d", Config.ROI_CENTER_X, Config.ROI_CENTER_Y, Config.ROI_SIZE)
         elif action == "update_config":
-            if "detect_dist"    in cmd: Config.DETECT_DISTANCE_CM          = float(cmd["detect_dist"])
-            if "withdraw_dist"  in cmd: Config.HAND_WITHDRAWN_DISTANCE_CM  = float(cmd["withdraw_dist"])
-            if "cooldown"       in cmd: Config.COOLDOWN_SECONDS             = float(cmd["cooldown"])
-            if "min_conf"       in cmd: Config.MIN_CONFIDENCE_THRESHOLD     = float(cmd["min_conf"])
+            if "detect_dist"        in cmd: Config.DETECT_DISTANCE_CM              = float(cmd["detect_dist"])
+            if "withdraw_dist"      in cmd: Config.HAND_WITHDRAWN_DISTANCE_CM      = float(cmd["withdraw_dist"])
+            if "cooldown"           in cmd: Config.COOLDOWN_SECONDS                 = float(cmd["cooldown"])
+            if "min_conf"           in cmd: Config.MIN_CONFIDENCE_THRESHOLD         = float(cmd["min_conf"])
+            if "uncertainty_reject" in cmd: Config.UNCERTAINTY_REJECT_THRESHOLD     = float(cmd["uncertainty_reject"])
+            if "photo_settle"       in cmd: Config.PHOTO_SETTLE_DELAY               = float(cmd["photo_settle"])
+            if "flash_settle"       in cmd: Config.FLASH_SETTLE_DELAY               = float(cmd["flash_settle"])
+            if "servo_settle"       in cmd: Config.SERVO_SETTLE_TIME_S            = float(cmd["servo_settle"])
+            if "servo_hold"         in cmd: Config.SERVO_HOLD_TIME_S                = float(cmd["servo_hold"])
+            logger.info("Config updated: %s", {k: cmd[k] for k in cmd if k != "action"})
         elif action == "manual_sort":
             cls = cmd.get("class", "reject")
             logger.info("Manual sort triggered: %s", cls)
@@ -1008,16 +1053,22 @@ class SmartBinEngine:
         assert hw
 
         try:
-            # t=0.00 — Tilt capture arm to photo position (120°)
-            # High speed here guarantees it has the torque to lift against gravity
+            # Stage 0 — Move capture arm to photo position (120°)
+            # smooth_move already includes SERVO_SETTLE_TIME_S after reaching target
             hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=55.0)
-            
-            # Flash + Capture
+            # Extra settle specifically for the capture arm (mechanical load may vary)
+            time.sleep(Config.PHOTO_SETTLE_DELAY)
+
+            # Flash ON, wait for light / exposure settle, then capture
             self._send_flash(on=True)
-            time.sleep(0.5) 
+            time.sleep(Config.FLASH_SETTLE_DELAY)
             frame = self._capture_http_frame()
-            self._send_flash(on=False) 
-            
+            self._send_flash(on=False)
+
+            # Log commanded angle at capture moment (open-loop — no feedback)
+            servo1_cmd = hw._last_angle.get(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
+            logger.info("[t=%.3f] Capture frame at servo1_cmd=%.0f°", time.monotonic() - t0, servo1_cmd)
+
             if frame is None:
                 logger.warning("Failed capture — aborting pipeline")
                 return
@@ -1026,8 +1077,8 @@ class SmartBinEngine:
             start_ms = time.time() * 1000.0
             label, conf = classify_single_frame(frame)
             elapsed_ms = (time.time() * 1000.0) - start_ms
-            
-            logger.info("[t=%.3f] Result: %s (conf=%.2f)", 
+
+            logger.info("[t=%.3f] Result: %s (conf=%.2f)",
                         time.monotonic() - t0, label, conf)
             self._record_sort(label, conf, elapsed_ms)
 
@@ -1039,7 +1090,7 @@ class SmartBinEngine:
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=35.0)
 
             # Stage 3: Drop (Servo 1)
-            time.sleep(0.2) 
+            time.sleep(0.2)
             hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=65.0)
             time.sleep(0.6)
 
@@ -1049,7 +1100,8 @@ class SmartBinEngine:
             # CRITICAL: Always return both servos to Home / Center
             hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=45.0)
             hw.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=45.0)
-            time.sleep(0.2)
+            # Hold PWM briefly so horn settles under load before cutting torque
+            time.sleep(Config.SERVO_HOLD_TIME_S)
             hw.idle_servos(force=True)
             logger.info("[t=%.3f] Pipeline finished & Reset", time.monotonic() - t0)
 
@@ -1060,7 +1112,7 @@ class SmartBinEngine:
         """Map predicted class name → Servo2 angle."""
         ll = label.lower()
         if "reject" in ll:
-            return Config.SORT_HOME_ANGLE   # stay home, drop in default bin
+            return Config.REJECT_SERVO_ANGLE   # dedicated reject bin (defaults to home)
         if "pet" in ll or "hdpe" in ll or "plastic" in ll:
             return Config.PLASTIC_ANGLE  # 112°
         if "glass" in ll:

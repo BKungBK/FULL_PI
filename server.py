@@ -485,7 +485,9 @@ async def get_roi() -> JSONResponse:
 @app.post("/control/config")
 async def update_config(body: dict) -> JSONResponse:
     cmd = {"action": "update_config"}
-    for k in ("detect_dist", "withdraw_dist", "cooldown", "min_conf"):
+    for k in ("detect_dist", "withdraw_dist", "cooldown", "min_conf",
+              "uncertainty_reject", "photo_settle", "flash_settle",
+              "servo_settle", "servo_hold"):
         if k in body:
             cmd[k] = body[k]
     system_state.send_command(cmd)
