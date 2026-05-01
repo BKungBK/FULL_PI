@@ -136,11 +136,11 @@ html,body{height:100%;background:var(--bg);color:var(--t0);font-family:var(--san
 
 /* ── slider ───────────────────────────────────────────────── */
 input[type=range]{
-  -webkit-appearance:none;width:100%;height:3px;
+  -webkit-appearance:none;appearance:none;width:100%;height:3px;
   background:var(--s3);border-radius:2px;outline:none;cursor:pointer;
 }
 input[type=range]::-webkit-slider-thumb{
-  -webkit-appearance:none;width:13px;height:13px;
+  -webkit-appearance:none;appearance:none;width:13px;height:13px;
   border-radius:50%;background:var(--t0);cursor:pointer;
   border:2px solid var(--bg);transition:transform .12s;
 }
@@ -500,6 +500,15 @@ table.mt tr:hover td{background:var(--s2)}
       </div>
     </div>
 
+    <!-- Last captured AI image preview (cropped + preprocessed) -->
+    <div class="card" id="last-ai-wrap" style="display:none">
+      <div class="clabel" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span>Last AI Input (224×224 CLAHE)</span>
+        <span style="font-size:9px;color:var(--t2)" id="last-ai-meta"></span>
+      </div>
+      <img id="last-ai-img" style="width:224px;height:224px;border-radius:4px;background:var(--s2);display:block;margin:0 auto" src="" alt="">
+    </div>
+
     <!-- Right column -->
     <div class="dash-right">
 
@@ -771,6 +780,49 @@ table.mt tr:hover td{background:var(--s2)}
     </div>
   </div>
 
+  <div class="set-card">
+    <div class="set-title">Servo Angles &amp; Distance</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Capture Home (°)</label>
+        <input type="number" id="ang-cap" min="0" max="180" value="99" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Sort Home (°)</label>
+        <input type="number" id="ang-srt" min="0" max="180" value="86" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Photo Angle (°)</label>
+        <input type="number" id="ang-photo" min="0" max="180" value="120" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Sweep/Drop (°)</label>
+        <input type="number" id="ang-sweep" min="0" max="180" value="45" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Plastic Bin (°)</label>
+        <input type="number" id="ang-plastic" min="0" max="180" value="112" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Glass Bin (°)</label>
+        <input type="number" id="ang-glass" min="0" max="180" value="157" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Metal Bin (°)</label>
+        <input type="number" id="ang-metal" min="0" max="180" value="67" style="width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Reject Bin (°)</label>
+        <input type="number" id="ang-reject" min="0" max="180" value="86" style="width:100%">
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:10px">
+      <label style="font-family:var(--mono);font-size:9px;color:var(--t2)">Detect Distance (cm)</label>
+      <input type="number" id="ang-dist" min="1" max="100" value="10" style="width:120px">
+    </div>
+    <button class="btn btn-sm" onclick="saveServoConfig()" style="align-self:flex-start">Save All</button>
+  </div>
+
 </div><!-- /p-set -->
 </div><!-- /shell -->
 <div id="toast"></div>
@@ -822,7 +874,26 @@ async function loadConfig() {
       <button class="btn btn-sm" style="color:var(--cg)" onclick="svPreset('sort',${SYS_CFG.GLASS})">G(${SYS_CFG.GLASS}°)</button>
       <button class="btn btn-sm" style="color:var(--t2)" onclick="svPreset('sort',${SYS_CFG.SORT_HOME})">H(${SYS_CFG.SORT_HOME}°)</button>
     `;
+
+    // Populate Settings panel inputs
+    if (SYS_CFG.CAP_HOME  !== undefined) document.getElementById('ang-cap').value     = SYS_CFG.CAP_HOME;
+    if (SYS_CFG.SORT_HOME !== undefined) document.getElementById('ang-srt').value    = SYS_CFG.SORT_HOME;
+    if (SYS_CFG.PHOTO     !== undefined) document.getElementById('ang-photo').value  = SYS_CFG.PHOTO;
+    if (SYS_CFG.SWEEP     !== undefined) document.getElementById('ang-sweep').value   = SYS_CFG.SWEEP;
+    if (SYS_CFG.PLASTIC   !== undefined) document.getElementById('ang-plastic').value = SYS_CFG.PLASTIC;
+    if (SYS_CFG.GLASS     !== undefined) document.getElementById('ang-glass').value   = SYS_CFG.GLASS;
+    if (SYS_CFG.METAL     !== undefined) document.getElementById('ang-metal').value = SYS_CFG.METAL;
+    if (SYS_CFG.REJECT    !== undefined) document.getElementById('ang-reject').value = SYS_CFG.REJECT;
+    if (SYS_CFG.detect_dist !== undefined) syncDetectDist(+SYS_CFG.detect_dist, 'cfg');
   }
+}
+
+function syncDetectDist(v, src){
+  const elSl = document.getElementById('t-det');
+  const elSlV = document.getElementById('t-det-v');
+  const elIn = document.getElementById('ang-dist');
+  if(src !== 'slider' && elIn) elIn.value = v;
+  if(src !== 'input' && elSl){ elSl.value = v; if(elSlV) elSlV.textContent = v; }
 }
 
 /* ── state cache ──────────────────────────────────────────── */
@@ -934,6 +1005,17 @@ function renderSort(m) {
   lbl.textContent = `${m.label}  ${(m.confidence*100).toFixed(0)}%`;
   lbl.style.color = c;
   setTimeout(()=>lbl.style.color='',2000);
+  // Show last AI input image if present
+  if (m.image_b64) {
+    const wrap = document.getElementById('last-ai-wrap');
+    const img  = document.getElementById('last-ai-img');
+    const meta = document.getElementById('last-ai-meta');
+    if (wrap && img) {
+      img.src = 'data:image/jpeg;base64,' + m.image_b64;
+      wrap.style.display = '';
+      if (meta) meta.textContent = m.label + ' ' + ((m.confidence||0)*100).toFixed(0) + '%';
+    }
+  }
 }
 
 function renderCounts(counts, total) {
@@ -1340,17 +1422,37 @@ async function resetStats(){ await api('POST','/api/stats/reset'); toast('Stats 
 async function resetCm()   { await api('POST','/api/performance/reset'); toast('Confusion reset',true); if(charts.cm) buildCm({}); }
 function applyIp(){ const ip=document.getElementById('s-ip').value.trim(); if(ip){ api('POST','/control/config',{esp32_ip:ip}); toast(`ESP32: ${ip}`,true); } }
 function applyThresh(){
+  const d = +document.getElementById('t-det').value;
   api('POST','/control/config',{
-    detect_dist:  +document.getElementById('t-det').value,
+    detect_dist:  d,
     withdraw_dist:+document.getElementById('t-wd').value,
     cooldown:     +document.getElementById('t-cd').value,
     min_conf:     +document.getElementById('t-yc').value/100,
-  }); toast('Thresholds applied',true);
+  }); 
+  syncDetectDist(d, 'slider');
+  toast('Thresholds applied',true);
+}
+function saveServoConfig(){
+  const d = +document.getElementById('ang-dist').value;
+  api('POST','/control/config',{
+    cap_home:  +document.getElementById('ang-cap').value,
+    sort_home: +document.getElementById('ang-srt').value,
+    photo:     +document.getElementById('ang-photo').value,
+    sweep:     +document.getElementById('ang-sweep').value,
+    plastic:   +document.getElementById('ang-plastic').value,
+    glass:     +document.getElementById('ang-glass').value,
+    metal:     +document.getElementById('ang-metal').value,
+    reject:    +document.getElementById('ang-reject').value,
+    detect_dist: d,
+  }).then(r=>{
+    if(r.ok){ syncDetectDist(d, 'input'); toast('Saved — values persisted',true); }
+    else { toast('Save failed',false); }
+  });
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════
    ANALYTICS
-══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════ */
 const CD={
   color:'#fff',
   plugins:{

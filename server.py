@@ -171,7 +171,7 @@ async def _broadcast(payload: dict) -> None:
 
 def _on_sort_event(snap: dict) -> None:
     """Callback registered with shared_state — fires on every sort."""
-    payload = {
+    payload: dict = {
         "type": "sort_result",
         "label":      snap["last_label"],
         "confidence": snap["last_confidence"],
@@ -180,6 +180,9 @@ def _on_sort_event(snap: dict) -> None:
         "total_sorted": snap["total_sorted"],
         "sort_history": snap["sort_history"],
     }
+    b64 = snap.get("last_image_b64", "")
+    if b64:
+        payload["image_b64"] = b64
     if _server_loop is not None:
         asyncio.run_coroutine_threadsafe(_broadcast(payload), _server_loop)
 
@@ -487,7 +490,9 @@ async def update_config(body: dict) -> JSONResponse:
     cmd = {"action": "update_config"}
     for k in ("detect_dist", "withdraw_dist", "cooldown", "min_conf",
               "uncertainty_reject", "photo_settle", "flash_settle",
-              "servo_settle", "servo_hold"):
+              "servo_settle", "servo_hold", "home_verify",
+              "cap_home", "sort_home", "photo", "sweep",
+              "plastic", "glass", "metal", "reject"):
         if k in body:
             cmd[k] = body[k]
     system_state.send_command(cmd)
@@ -525,13 +530,24 @@ async def get_config() -> JSONResponse:
     try:
         from main import Config
         return JSONResponse({"success": True, "data": {
-            "CAP_HOME": getattr(Config, "CAP_HOME_ANGLE", 92),
-            "SORT_HOME": getattr(Config, "SORT_HOME_ANGLE", 92),
+            "CAP_HOME": getattr(Config, "CAP_HOME_ANGLE", 99),
+            "SORT_HOME": getattr(Config, "SORT_HOME_ANGLE", 86),
             "PHOTO": getattr(Config, "PHOTO_ANGLE", 120),
             "SWEEP": getattr(Config, "SWEEP_ANGLE", 45),
             "PLASTIC": getattr(Config, "PLASTIC_ANGLE", 112),
             "GLASS": getattr(Config, "GLASS_ANGLE", 157),
             "METAL": getattr(Config, "METAL_ANGLE", 67),
+            "REJECT": getattr(Config, "REJECT_SERVO_ANGLE", 86),
+            "detect_dist": getattr(Config, "DETECT_DISTANCE_CM", 10.0),
+            "withdraw_dist": getattr(Config, "HAND_WITHDRAWN_DISTANCE_CM", 20.0),
+            "cooldown": getattr(Config, "COOLDOWN_SECONDS", 5.0),
+            "min_conf": getattr(Config, "MIN_CONFIDENCE_THRESHOLD", 0.50),
+            "uncertainty_reject": getattr(Config, "UNCERTAINTY_REJECT_THRESHOLD", 0.30),
+            "photo_settle": getattr(Config, "PHOTO_SETTLE_DELAY", 0.25),
+            "flash_settle": getattr(Config, "FLASH_SETTLE_DELAY", 0.20),
+            "servo_settle": getattr(Config, "SERVO_SETTLE_TIME_S", 0.20),
+            "servo_hold": getattr(Config, "SERVO_HOLD_TIME_S", 0.30),
+            "home_verify": getattr(Config, "HOME_VERIFY_DELAY_S", 0.40),
         }})
     except Exception as e:
         return JSONResponse({"success": False, "detail": str(e)})

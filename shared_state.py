@@ -37,6 +37,7 @@ class _SystemState:
     last_inference_ms: float = 0.0
     last_sort_time: str = ""
     last_predicted: str = ""           # used by confirm-sort UI
+    last_image_b64: str = ""           # base64 JPEG of last AI input image
 
     # ── Live sensor ────────────────────────────────────────────────────
     main_distance_cm: float = 999.0
@@ -104,6 +105,7 @@ class SharedState:
                 "last_inference_ms":  s.last_inference_ms,
                 "last_sort_time":     s.last_sort_time,
                 "last_predicted":     s.last_predicted,
+                "last_image_b64":     s.last_image_b64,
                 "main_distance_cm":   s.main_distance_cm,
                 "bin_distances_cm":   list(s.bin_distances_cm),
                 "esp32_ip":           s.esp32_ip,
@@ -165,6 +167,7 @@ class SharedState:
         label: str,
         confidence: float,
         inference_ms: float,
+        image_b64: str = "",
     ) -> None:
         """Called by the engine when a sort completes."""
         with self._lock:
@@ -173,6 +176,8 @@ class SharedState:
             s.last_confidence  = confidence
             s.last_inference_ms = inference_ms
             s.last_predicted   = label
+            if image_b64:
+                s.last_image_b64 = image_b64
             s.last_sort_time   = time.strftime("%H:%M:%S")
 
             s.sort_counts[label] = s.sort_counts.get(label, 0) + 1

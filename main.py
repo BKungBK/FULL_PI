@@ -22,6 +22,7 @@ from __future__ import annotations
 
 # ── stdlib ────────────────────────────────────────────────────────────
 import logging
+import base64
 import math
 import os
 import signal
@@ -127,7 +128,7 @@ class Config:
     METAL_ANGLE: int = 67    # AluCan (default)
 
     # ── Timing (seconds) ─────────────────────────────────────────────
-    DETECT_DISTANCE_CM: float = 15.0
+    DETECT_DISTANCE_CM: float = 10.0
     HAND_WITHDRAWN_DISTANCE_CM: float = 20.0   # hysteresis for release
     BIN_FULL_DISTANCE_CM: float = 10.0
     COOLDOWN_SECONDS: float = 5.0
@@ -142,8 +143,10 @@ class Config:
     SERVO_UPDATE_HZ: float = 50.0            # match PWM period (20 ms)
     SERVO_SETTLE_TIME_S: float = 0.20        # post-move mechanical damping
     SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
+    HOME_VERIFY_DELAY_S: float = 0.40        # extra hold after re-command home (prevents sag)
     PHOTO_SETTLE_DELAY: float = 0.25         # wait after servo reaches PHOTO_ANGLE
     FLASH_SETTLE_DELAY: float = 0.20         # wait after flash ON before capture
+    HOME_ALL_DELAY_S: float = 0.80           # worst-case full-sweep homing at startup
 
     # ── Reject bin servo angle ───────────────────────────────────────
     REJECT_SERVO_ANGLE: int = 86   # default = SORT_HOME_ANGLE; set to 4th bin angle if hardware supports
@@ -170,6 +173,7 @@ class GlobalState:
     """Mutable singletons shared by inference functions."""
     classifier_interpreter: Optional[tflite.Interpreter] = None
     last_roi_coords: Optional[Tuple[int, int, int, int]] = None
+    last_ai_image_b64: str = ""   # base64 JPEG of the image actually fed to predict()
 
 
 g_state = GlobalState()
@@ -415,15 +419,26 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
         return "reject", 0.0
 
 
+def _encode_jpg_b64(img: np.ndarray, quality: int = 85) -> str:
+    """Encode an OpenCV BGR image to base64 JPEG string."""
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        return ""
+    return base64.b64encode(buf).decode("ascii")
+
+
 def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
     """Full pipeline: extract ROI + prepare image + classify one frame."""
     roi_frame, roi_coords = crop_roi(frame)
     g_state.last_roi_coords = roi_coords
     roi224 = prepare_image(roi_frame)
-    
+
     # ── Match exact dataset_tool.py preprocessing ──
     processed = apply_clahe(roi224)
-    
+
+    # ── Keep base64 snapshot of the exact AI input image ──
+    g_state.last_ai_image_b64 = _encode_jpg_b64(processed)
+
     return predict(processed)
 
 
@@ -551,9 +566,9 @@ class HardwareController:
 
     def __init__(self, chip: int) -> None:
         self._h = chip
-        self._last_angle: Dict[int, float] = {
-            Config.SERVO1_PIN: Config.CAP_HOME_ANGLE,
-            Config.SERVO2_PIN: Config.SORT_HOME_ANGLE,
+        self._last_angle: Dict[int, Optional[float]] = {
+            Config.SERVO1_PIN: None,
+            Config.SERVO2_PIN: None,
         }
         self._init_pins()
 
@@ -577,6 +592,51 @@ class HardwareController:
         pulse_us = int(500 + (angle / 180.0) * 2000)
         lgpio.tx_servo(self._h, pin, pulse_us)
         self._last_angle[pin] = angle
+
+    def warmup_servo(self, pin: int) -> None:
+        """Ensure PWM wave is active. Call after idle or before first move."""
+        angle = self._last_angle.get(pin)
+        if angle is None:
+            home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
+            angle = home_angle
+            self.move_servo(pin, angle)
+            time.sleep(1.0)   # worst-case full sweep
+        else:
+            self.move_servo(pin, angle)
+            time.sleep(0.05)  # 1+ PWM period to let wave stabilise
+
+    def home_all(self) -> None:
+        """Slow, forceful return to home. Call once at engine startup."""
+        for pin, home in ((Config.SERVO1_PIN, Config.CAP_HOME_ANGLE),
+                          (Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)):
+            self.warmup_servo(pin)
+            self.move_servo(pin, home)
+            time.sleep(Config.HOME_ALL_DELAY_S)
+            self._last_angle[pin] = float(home)
+            logger.info("Home complete pin=%d angle=%.0f°", pin, home)
+
+    def return_to_home(self) -> None:
+        """Guaranteed home — move both, re-command home, then hold.
+
+        Re-commands the home pulse after both servos arrive.  This catches
+        any sag that occurs while the other servo is still moving.  Only
+        then do we sleep HOME_VERIFY_DELAY_S before returning.
+        """
+        # Stage 1 — smooth move to home (conservative speed)
+        self.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=30.0)
+        self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
+
+        # Stage 2 — re-command exact home pulse (catches gravity sag)
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
+        self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
+
+        # Stage 3 — hold PWM alive so horn settles under load
+        time.sleep(Config.HOME_VERIFY_DELAY_S)
+
+        # Stage 4 — mark known positions
+        self._last_angle[Config.SERVO1_PIN] = float(Config.CAP_HOME_ANGLE)
+        self._last_angle[Config.SERVO2_PIN] = float(Config.SORT_HOME_ANGLE)
+
     def smooth_move(
         self,
         pin: int,
@@ -590,7 +650,15 @@ class HardwareController:
         SERVO_SETTLE_TIME_S so the horn mechanically damps out.
         """
         home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
-        start = self._last_angle.get(pin, home_angle)
+        start = self._last_angle.get(pin)
+
+        if start is None:
+            # Unknown position — force a slow home first, then proceed
+            self.warmup_servo(pin)
+            self.move_servo(pin, home_angle)
+            time.sleep(Config.HOME_ALL_DELAY_S)
+            start = home_angle
+            self._last_angle[pin] = start
 
         target = float(round(target))
         distance = abs(target - start)
@@ -639,12 +707,15 @@ class HardwareController:
         )
 
     def idle_servos(self, force: bool = False) -> None:
-        """Stop PWM signal to reduce servo heat. 
+        """Stop PWM signal to reduce servo heat.
         Only idles if near Home (92°) unless force=True to prevent dropping heavy loads.
+        Marks _last_angle as None so the next move knows position is unknown.
         """
         for pin in (Config.SERVO1_PIN, Config.SERVO2_PIN):
             home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
             angle = self._last_angle.get(pin, home_angle)
+            if angle is None:
+                angle = home_angle
             # Safe to idle ONLY if at Home or Forced
             if force or abs(angle - home_angle) < 2.0:
                 try:
@@ -654,6 +725,7 @@ class HardwareController:
                         lgpio.tx_pwm(self._h, pin, 50, 0)
                     except Exception as exc:
                         logger.debug("idle_servos pin %d: %s", pin, exc)
+                self._last_angle[pin] = None   # position now unknown
 
     # ── ultrasonic ────────────────────────────────────────────────────
 
@@ -785,33 +857,85 @@ class SmartBinEngine:
         self._cam: Optional[CameraStream] = None
         self._esp32_ip: str = ""
         self._cv2_ok: bool = True   # flipped False on first headless cv2.error
-        self._load_roi_config()
+        self._load_config()
 
-    def _load_roi_config(self) -> None:
+    def _load_config(self) -> None:
+        """Load unified config from smartbin_config.json (falls back to roi_config.json)."""
         import os, json
-        try:
-            if os.path.exists("roi_config.json"):
+        path = "smartbin_config.json"
+        # Migration: read old roi_config.json if new file doesn't exist
+        if not os.path.exists(path) and os.path.exists("roi_config.json"):
+            try:
                 with open("roi_config.json", "r") as f:
-                    data = json.load(f)
-                    Config.ROI_CENTER_X = data.get("cx", 320)
-                    Config.ROI_CENTER_Y = data.get("cy", 240)
-                    Config.ROI_SIZE     = data.get("size", 320)
-                logger.info("Loaded ROI from config: cx=%d cy=%d size=%d", 
-                            Config.ROI_CENTER_X, Config.ROI_CENTER_Y, Config.ROI_SIZE)
+                    old = json.load(f)
+                with open(path, "w") as f:
+                    json.dump({"roi": old}, f)
+                logger.info("Migrated roi_config.json -> smartbin_config.json")
+            except Exception as e:
+                logger.error("Migration failed: %s", e)
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            # ROI
+            roi = data.get("roi", {})
+            Config.ROI_CENTER_X = int(roi.get("cx", 320))
+            Config.ROI_CENTER_Y = int(roi.get("cy", 240))
+            Config.ROI_SIZE     = int(roi.get("size", 320))
+            # Servo angles
+            sa = data.get("servo_angles", {})
+            Config.CAP_HOME_ANGLE  = int(sa.get("cap_home", Config.CAP_HOME_ANGLE))
+            Config.SORT_HOME_ANGLE = int(sa.get("sort_home", Config.SORT_HOME_ANGLE))
+            Config.PHOTO_ANGLE     = int(sa.get("photo", Config.PHOTO_ANGLE))
+            Config.SWEEP_ANGLE     = int(sa.get("sweep", Config.SWEEP_ANGLE))
+            Config.PLASTIC_ANGLE   = int(sa.get("plastic", Config.PLASTIC_ANGLE))
+            Config.GLASS_ANGLE     = int(sa.get("glass", Config.GLASS_ANGLE))
+            Config.METAL_ANGLE     = int(sa.get("metal", Config.METAL_ANGLE))
+            Config.REJECT_SERVO_ANGLE = int(sa.get("reject", Config.REJECT_SERVO_ANGLE))
+            # Detection / timing
+            dt = data.get("detection", {})
+            Config.DETECT_DISTANCE_CM = float(dt.get("detect_dist", Config.DETECT_DISTANCE_CM))
+            Config.HAND_WITHDRAWN_DISTANCE_CM = float(dt.get("withdraw_dist", Config.HAND_WITHDRAWN_DISTANCE_CM))
+            Config.COOLDOWN_SECONDS = float(dt.get("cooldown", Config.COOLDOWN_SECONDS))
+            Config.MIN_CONFIDENCE_THRESHOLD = float(dt.get("min_conf", Config.MIN_CONFIDENCE_THRESHOLD))
+            Config.UNCERTAINTY_REJECT_THRESHOLD = float(dt.get("uncertainty_reject", Config.UNCERTAINTY_REJECT_THRESHOLD))
+            logger.info("Loaded smartbin_config.json")
         except Exception as e:
-            logger.error("Failed to load ROI config: %s", e)
+            logger.error("Failed to load config: %s", e)
 
-    def _save_roi_config(self) -> None:
+    def _save_config(self) -> None:
+        """Persist all tunable config to smartbin_config.json."""
         import json
         try:
-            with open("roi_config.json", "w") as f:
+            with open("smartbin_config.json", "w") as f:
                 json.dump({
-                    "cx": Config.ROI_CENTER_X,
-                    "cy": Config.ROI_CENTER_Y,
-                    "size": Config.ROI_SIZE
-                }, f)
+                    "roi": {
+                        "cx": Config.ROI_CENTER_X,
+                        "cy": Config.ROI_CENTER_Y,
+                        "size": Config.ROI_SIZE,
+                    },
+                    "servo_angles": {
+                        "cap_home": Config.CAP_HOME_ANGLE,
+                        "sort_home": Config.SORT_HOME_ANGLE,
+                        "photo": Config.PHOTO_ANGLE,
+                        "sweep": Config.SWEEP_ANGLE,
+                        "plastic": Config.PLASTIC_ANGLE,
+                        "glass": Config.GLASS_ANGLE,
+                        "metal": Config.METAL_ANGLE,
+                        "reject": Config.REJECT_SERVO_ANGLE,
+                    },
+                    "detection": {
+                        "detect_dist": Config.DETECT_DISTANCE_CM,
+                        "withdraw_dist": Config.HAND_WITHDRAWN_DISTANCE_CM,
+                        "cooldown": Config.COOLDOWN_SECONDS,
+                        "min_conf": Config.MIN_CONFIDENCE_THRESHOLD,
+                        "uncertainty_reject": Config.UNCERTAINTY_REJECT_THRESHOLD,
+                    },
+                }, f, indent=2)
+            logger.info("Saved smartbin_config.json")
         except Exception as e:
-            logger.error("Failed to save ROI config: %s", e)
+            logger.error("Failed to save config: %s", e)
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -831,10 +955,8 @@ class SmartBinEngine:
         chip = lgpio.gpiochip_open(0)
         self._hw = HardwareController(chip)
         logger.info("Initializing servos to Home...")
-        self._hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        self._hw.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
-        time.sleep(1)
-        self._hw.idle_servos()
+        self._hw.home_all()
+        self._hw.idle_servos(force=True)
 
         # ── SIGTERM handler for systemd graceful shutdown ──────────────────
         try:
@@ -970,20 +1092,19 @@ class SmartBinEngine:
             home_angle = Config.CAP_HOME_ANGLE if name == "capture" else Config.SORT_HOME_ANGLE
             angle = int(cmd.get("angle", home_angle))
             if name == "capture":
-                # Increase speed to 25 deg/sec for smoother movement
-                hw.smooth_move(Config.SERVO1_PIN, angle, speed=25.0)
-                time.sleep(0.3)
-                hw.idle_servos()
+                hw.smooth_move(Config.SERVO1_PIN, angle, speed=30.0)
+                time.sleep(Config.SERVO_HOLD_TIME_S)
+                hw.idle_servos(force=True)
             elif name == "sort":
-                hw.smooth_move(Config.SERVO2_PIN, angle, speed=25.0)
-                time.sleep(0.3)
-                hw.idle_servos()
+                hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
+                time.sleep(Config.SERVO_HOLD_TIME_S)
+                hw.idle_servos(force=True)
             elif name == "all":
                 # Manual 'all' command (e.g. from Home button)
-                hw.smooth_move(Config.SERVO1_PIN, angle, speed=35.0)
-                hw.smooth_move(Config.SERVO2_PIN, angle, speed=35.0)
-                time.sleep(0.3)
-                hw.idle_servos()
+                hw.smooth_move(Config.SERVO1_PIN, angle, speed=30.0)
+                hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
+                time.sleep(Config.SERVO_HOLD_TIME_S)
+                hw.idle_servos(force=True)
         elif action == "flash":
             self._send_flash(on=bool(cmd.get("on", False)))
         elif action == "mode":
@@ -996,7 +1117,7 @@ class SmartBinEngine:
             Config.ROI_CENTER_X = int(cmd.get("cx", 320))
             Config.ROI_CENTER_Y = int(cmd.get("cy", 240))
             Config.ROI_SIZE     = int(cmd.get("size", 320))
-            self._save_roi_config()
+            self._save_config()
             logger.info("ROI updated & saved: cx=%d cy=%d size=%d", Config.ROI_CENTER_X, Config.ROI_CENTER_Y, Config.ROI_SIZE)
         elif action == "update_config":
             if "detect_dist"        in cmd: Config.DETECT_DISTANCE_CM              = float(cmd["detect_dist"])
@@ -1008,6 +1129,17 @@ class SmartBinEngine:
             if "flash_settle"       in cmd: Config.FLASH_SETTLE_DELAY               = float(cmd["flash_settle"])
             if "servo_settle"       in cmd: Config.SERVO_SETTLE_TIME_S            = float(cmd["servo_settle"])
             if "servo_hold"         in cmd: Config.SERVO_HOLD_TIME_S                = float(cmd["servo_hold"])
+            if "home_verify"        in cmd: Config.HOME_VERIFY_DELAY_S               = float(cmd["home_verify"])
+            # Servo angles
+            if "cap_home"  in cmd: Config.CAP_HOME_ANGLE  = int(cmd["cap_home"])
+            if "sort_home" in cmd: Config.SORT_HOME_ANGLE = int(cmd["sort_home"])
+            if "photo"     in cmd: Config.PHOTO_ANGLE     = int(cmd["photo"])
+            if "sweep"     in cmd: Config.SWEEP_ANGLE     = int(cmd["sweep"])
+            if "plastic"   in cmd: Config.PLASTIC_ANGLE   = int(cmd["plastic"])
+            if "glass"     in cmd: Config.GLASS_ANGLE     = int(cmd["glass"])
+            if "metal"     in cmd: Config.METAL_ANGLE     = int(cmd["metal"])
+            if "reject"    in cmd: Config.REJECT_SERVO_ANGLE = int(cmd["reject"])
+            self._save_config()
             logger.info("Config updated: %s", {k: cmd[k] for k in cmd if k != "action"})
         elif action == "manual_sort":
             cls = cmd.get("class", "reject")
@@ -1017,17 +1149,15 @@ class SmartBinEngine:
                 # Servo 2 (Sort): Slow and steady to stop swaying
                 hw.smooth_move(Config.SERVO2_PIN, target, speed=30.0)
                 time.sleep(0.3)
-                # Servo 1 (Capture): Needs high speed for torque/lifting power
-                hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=60.0)
+                # Servo 1 (Capture): conservative speed for loaded arm
+                hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
                 time.sleep(0.5)
             except Exception as exc:
                 logger.error("Manual sort servo error: %s", exc)
             finally:
                 # ALWAYS reset servos to Home — prevents stuck at non-home angle
-                hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=50.0)
-                hw.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=35.0)
-                time.sleep(0.2)
-                hw.idle_servos()
+                hw.return_to_home()
+                hw.idle_servos(force=True)
             if system_state:
                 system_state.add_sort_event(cls, 1.0, 0.0)
 
@@ -1055,7 +1185,7 @@ class SmartBinEngine:
         try:
             # Stage 0 — Move capture arm to photo position (120°)
             # smooth_move already includes SERVO_SETTLE_TIME_S after reaching target
-            hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=55.0)
+            hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=35.0)
             # Extra settle specifically for the capture arm (mechanical load may vary)
             time.sleep(Config.PHOTO_SETTLE_DELAY)
 
@@ -1083,25 +1213,22 @@ class SmartBinEngine:
             self._record_sort(label, conf, elapsed_ms)
 
             # Stage 1: Reset Arm to Neutral
-            hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=50.0)
+            hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=30.0)
 
             # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
-            hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=35.0)
+            hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
 
             # Stage 3: Drop (Servo 1)
             time.sleep(0.2)
-            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=65.0)
+            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
             time.sleep(0.6)
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
         finally:
             # CRITICAL: Always return both servos to Home / Center
-            hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=45.0)
-            hw.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=45.0)
-            # Hold PWM briefly so horn settles under load before cutting torque
-            time.sleep(Config.SERVO_HOLD_TIME_S)
+            hw.return_to_home()
             hw.idle_servos(force=True)
             logger.info("[t=%.3f] Pipeline finished & Reset", time.monotonic() - t0)
 
@@ -1129,7 +1256,10 @@ class SmartBinEngine:
     def _record_sort(self, label: str, conf: float, inference_ms: float = 0.0) -> None:
         """Record sort result to shared_state (used by UI + server)."""
         if system_state:
-            system_state.add_sort_event(label, conf, inference_ms)
+            system_state.add_sort_event(
+                label, conf, inference_ms,
+                image_b64=g_state.last_ai_image_b64
+            )
         else:
             logger.info("Sort: %s conf=%.2f inference=%.1fms", label, conf, inference_ms)
 
