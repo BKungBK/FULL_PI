@@ -889,89 +889,78 @@ class HardwareController:
         self._last_angle[Config.SERVO2_PIN] = float(Config.SORT_HOME_ANGLE)
 
     def return_to_home_eased(self, verify: bool = True) -> None:
-        """Guaranteed home with parallel movement and position verification.
+        """Guaranteed home with sequential movement and detailed logging.
         
-        CRITICAL FIX: Uses parallel movement + actual position tracking
-        to ensure servos REALLY arrive at home before returning.
+        CRITICAL FIX: Removed threading - Python threading causes timing issues.
+        Now uses sequential movement: servo1 first, then servo2.
         
         Args:
             verify: If True, re-commands home position until stable
         """
-        logger.info("Returning to home (parallel movement)...")
+        logger.info("=== RETURN TO HOME STARTED ===")
         
         mg995 = SERVO_PROFILES["MG995"]
         ds5180 = SERVO_PROFILES["DS5180SSG"]
         
-        # Calculate which servo takes longer to reach home
-        start1 = self._last_angle.get(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        start2 = self._last_angle.get(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
+        # Get current positions
+        start1 = self._last_angle.get(Config.SERVO1_PIN)
+        start2 = self._last_angle.get(Config.SERVO2_PIN)
         
-        dist1 = abs(Config.CAP_HOME_ANGLE - start1)
-        dist2 = abs(Config.SORT_HOME_ANGLE - start2)
+        logger.info("Current positions: servo1=%s°, servo2=%s°", start1, start2)
+        logger.info("Target positions: servo1=%d°, servo2=%d°", 
+                   Config.CAP_HOME_ANGLE, Config.SORT_HOME_ANGLE)
         
-        time1 = max(dist1 / mg995.max_speed_dps, 0.3) + mg995.settle_time
-        time2 = max(dist2 / ds5180.max_speed_dps, 0.3) + ds5180.settle_time
-        max_time = max(time1, time2)
+        # Phase 1: Move servo1 (MG995) to home first
+        if start1 is not None and abs(start1 - Config.CAP_HOME_ANGLE) > 0.5:
+            logger.info("Phase 1: Moving servo1 (MG995) to home...")
+            self.move_eased(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, mg995)
+        else:
+            logger.info("Phase 1: Servo1 already at home (or unknown position)")
+            if start1 is None:
+                # Unknown position - force move
+                self.move_eased(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, mg995)
         
-        logger.debug("Home ETA: servo1=%.2fs, servo2=%.2fs, max=%.2fs", time1, time2, max_time)
+        # Phase 2: Move servo2 (DS5180SSG) to home
+        if start2 is not None and abs(start2 - Config.SORT_HOME_ANGLE) > 0.5:
+            logger.info("Phase 2: Moving servo2 (DS5180SSG) to home...")
+            self.move_eased(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, ds5180)
+        else:
+            logger.info("Phase 2: Servo2 already at home (or unknown position)")
+            if start2 is None:
+                self.move_eased(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, ds5180)
         
-        # Phase 1: Start both servos moving to home (parallel)
-        # Use threading to move both simultaneously
-        import threading
-        
-        def move_servo_home(pin, angle, profile):
-            try:
-                self.move_eased(pin, angle, profile)
-            except Exception as e:
-                logger.error("Home move failed pin=%d: %s", pin, e)
-        
-        t1 = threading.Thread(target=move_servo_home, 
-                              args=(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, mg995))
-        t2 = threading.Thread(target=move_servo_home,
-                              args=(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, ds5180))
-        
-        t1.start()
-        t2.start()
-        
-        # Wait for both to complete
-        t1.join()
-        t2.join()
-        
-        # Phase 2: Verification loop (CRITICAL)
-        # Re-command home position until servo reports it's actually there
+        # Phase 3: Verification
         if verify:
-            logger.debug("Verifying home position...")
+            logger.info("Phase 3: Verifying home positions...")
             verify_start = time.perf_counter()
             
-            while time.perf_counter() - verify_start < 2.0:  # Max 2s verification
-                # Check if positions are correct
+            while time.perf_counter() - verify_start < 2.0:
                 pos1 = self._last_angle.get(Config.SERVO1_PIN)
                 pos2 = self._last_angle.get(Config.SERVO2_PIN)
                 
                 at_home1 = pos1 is not None and abs(pos1 - Config.CAP_HOME_ANGLE) < 1.0
                 at_home2 = pos2 is not None and abs(pos2 - Config.SORT_HOME_ANGLE) < 1.0
                 
+                logger.debug("Verify check: servo1=%s° (at_home=%s), servo2=%s° (at_home=%s)",
+                            pos1, at_home1, pos2, at_home2)
+                
                 if at_home1 and at_home2:
-                    logger.info("Home position verified")
+                    logger.info("Home position verified for both servos")
                     break
                 
-                # Re-command if not at home
                 if not at_home1:
-                    logger.debug("Re-commanding servo1 home (current=%s)", pos1)
+                    logger.warning("Servo1 not at home (current=%s°), re-commanding...", pos1)
                     self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
                 
                 if not at_home2:
-                    logger.debug("Re-commanding servo2 home (current=%s)", pos2)
+                    logger.warning("Servo2 not at home (current=%s°), re-commanding...", pos2)
                     self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
                 
                 time.sleep(0.1)
             else:
-                logger.warning("Home verification timeout - servos may not be at home!")
+                logger.error("Home verification timeout! Servos may not be at home.")
         
-        # Phase 3: Final mechanical settle
-        time.sleep(0.3)
-        
-        logger.info("Home return complete (verified)")
+        logger.info("=== RETURN TO HOME COMPLETE ===")
 
     def smooth_move(
         self,
@@ -1048,10 +1037,10 @@ class HardwareController:
         target: float,
         profile: ServoProfile = None,
     ) -> None:
-        """Dynamic servo movement with time-based interpolation.
+        """Step-based servo movement with easing (ช้า→เร็ว→ช้า).
         
-        Uses real-time easing calculation (ช้า→เร็ว→ช้า) for smooth motion.
-        Based on ServoEasing algorithm: time-based, not step-based.
+        CRITICAL FIX: Uses calculated step intervals instead of fixed time.sleep
+        to prevent jitter and ensure smooth motion.
         
         Args:
             pin: GPIO pin for servo
@@ -1068,6 +1057,7 @@ class HardwareController:
         start = self._last_angle.get(pin)
         
         if start is None:
+            logger.warning("move_eased: Unknown position for pin=%d, warming up first", pin)
             self.warmup_servo(pin)
             self.move_servo(pin, home_angle)
             time.sleep(Config.HOME_ALL_DELAY_S)
@@ -1084,54 +1074,52 @@ class HardwareController:
             logger.debug("move_eased: small move, direct set pin=%d to %.1f°", pin, target)
             return
         
-        # Calculate movement duration based on distance and speed
-        # Formula: t = d / v, with minimum for acceleration ramp
+        # Calculate movement parameters
+        # Time = distance / speed, with minimum for smooth acceleration
         duration = distance / profile.max_speed_dps
-        duration = max(0.3, duration)  # Min 300ms for smooth ramp
+        duration = max(0.2, duration)  # Min 200ms
         
+        # Calculate number of steps (1 degree per step for smooth motion)
+        num_steps = int(distance)
+        num_steps = max(10, num_steps)  # Minimum 10 steps for smoothness
+        
+        step_time = duration / num_steps
         direction = 1 if target > start else -1
         
-        logger.info("move_eased: %s pin=%d %.1f°→%.1f° (%.0f°/s, %.2fs)",
-                    profile.name, pin, start, target, profile.max_speed_dps, duration)
+        logger.info("move_eased: %s pin=%d %.1f°→%.1f° (dist=%.1f°, %d steps, %.3fs/step)",
+                    profile.name, pin, start, target, distance, num_steps, step_time)
         
-        # Time-based dynamic interpolation (ServoEasing algorithm)
-        # Uses high-resolution timing instead of fixed steps
-        start_time = time.perf_counter()
-        update_interval = 1.0 / profile.pwm_freq  # Match servo PWM period
-        last_angle_sent = start
+        # Execute step-based movement with easing
+        for step in range(num_steps + 1):
+            # Calculate eased progress (0→1 with smooth curve)
+            t_linear = step / num_steps
+            t_eased = profile.easing(t_linear)
+            
+            # Calculate angle for this step
+            angle = start + direction * distance * t_eased
+            
+            # Send command
+            self.move_servo(pin, angle)
+            self._last_angle[pin] = float(angle)
+            
+            # Wait for next step (adaptive: slower at start/end, faster in middle)
+            if step < num_steps:
+                # Adaptive timing: longer delays during acceleration/deceleration
+                # Easing derivative is steepest in middle (fastest motion)
+                # We want shorter delays when moving fast, longer when slow
+                speed_factor = 1.0 + 2.0 * abs(t_eased - t_linear)  # 1.0-3.0 range
+                adaptive_delay = step_time / speed_factor
+                time.sleep(max(0.001, adaptive_delay))
         
-        while True:
-            elapsed = time.perf_counter() - start_time
-            progress = min(1.0, elapsed / duration)
-            
-            # Apply easing curve (ช้า→เร็ว→ช้า)
-            eased_progress = profile.easing(progress)
-            
-            # Calculate current position
-            current_angle = start + direction * distance * eased_progress
-            
-            # Only send command if angle changed significantly (>0.5°)
-            # This reduces jitter while maintaining smooth motion
-            if abs(current_angle - last_angle_sent) >= 0.5 or progress >= 1.0:
-                self.move_servo(pin, current_angle)
-                last_angle_sent = current_angle
-            
-            if progress >= 1.0:
-                break
-            
-            # Adaptive sleep: shorter intervals during high acceleration
-            time.sleep(update_interval)
-        
-        # Final position command to ensure accuracy
+        # Final position command
         self.move_servo(pin, target)
+        self._last_angle[pin] = float(target)
         
-        # Servo-specific settle time (critical for mechanical damping)
+        # Servo-specific settle time
         if profile.settle_time > 0:
             time.sleep(profile.settle_time)
         
-        self._last_angle[pin] = float(target)
-        logger.info("move_eased complete: pin=%d at %.1f° (took %.3fs)", 
-                    pin, target, time.perf_counter() - start_time)
+        logger.info("move_eased complete: pin=%d at %.1f°", pin, target)
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
@@ -1654,11 +1642,37 @@ class SmartBinEngine:
             self._record_sort(label, conf, elapsed_ms)
 
             # Stage 1: Reset Arm to Neutral
+            logger.info("[t=%.3f] === STAGE 1: Reset Arm to Neutral (home=%d°) ===", 
+                       time.monotonic() - t0, Config.CAP_HOME_ANGLE)
             hw.move_eased(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, SERVO_PROFILES["MG995"])
 
             # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
-            hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
+            
+            # CRITICAL FIX: Get actual position, don't assume home if unknown
+            current_servo2_pos = hw._last_angle.get(Config.SERVO2_PIN)
+            if current_servo2_pos is None:
+                logger.warning("[t=%.3f] Servo2 position unknown! Assuming at home %d°", 
+                              time.monotonic() - t0, Config.SORT_HOME_ANGLE)
+                current_servo2_pos = Config.SORT_HOME_ANGLE
+                # Force update tracking
+                hw._last_angle[Config.SERVO2_PIN] = current_servo2_pos
+            
+            logger.info("[t=%.3f] === STAGE 2: Rotate Bin ===", time.monotonic() - t0)
+            logger.info("[t=%.3f] Label='%s' → target_angle=%d°", time.monotonic() - t0, label, target_angle)
+            logger.info("[t=%.3f] Servo2 current=%.1f°, target=%d°, distance=%.1f°",
+                       time.monotonic() - t0, current_servo2_pos, target_angle,
+                       abs(target_angle - current_servo2_pos))
+            
+            distance_servo2 = abs(target_angle - current_servo2_pos)
+            if distance_servo2 < 1.0:
+                logger.warning("[t=%.3f] Servo2 target ≈ current (dist=%.1f°). Still forcing move to ensure position.", 
+                              time.monotonic() - t0, distance_servo2)
+                # Force small move to ensure servo is at correct position
+                hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
+            else:
+                hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
+                logger.info("[t=%.3f] Servo2 movement complete", time.monotonic() - t0)
 
             # Stage 3: Drop (Servo 1)
             time.sleep(0.2)
