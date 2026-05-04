@@ -26,12 +26,15 @@ import base64
 import math
 import os
 import signal
+from dataclasses import dataclass
+from typing import Callable, List
+from collections import deque
 import socket
 import sys
 import threading
 import time
-from collections import Counter, deque
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import field
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -180,7 +183,122 @@ g_state = GlobalState()
 
 
 # =====================================================================
-# 3. DETECTION STATE MACHINE
+# 3. LOG BROADCAST HANDLER  (send logs to WebSocket)
+# =====================================================================
+class WebSocketLogHandler(logging.Handler):
+    """Custom log handler that sends logs to WebSocket clients.
+    
+    Queues recent logs and broadcasts them via shared_state.
+    """
+    def __init__(self, max_logs: int = 100):
+        super().__init__()
+        self._log_queue: deque = deque(maxlen=max_logs)
+        self._log_cbs: List[Callable] = []
+        
+    def emit(self, record: logging.LogRecord) -> None:
+        """Called whenever a log record is created."""
+        try:
+            log_entry = {
+                "time": time.strftime("%H:%M:%S", time.localtime(record.created)),
+                "level": record.levelname,
+                "message": self.format(record),
+                "source": record.name
+            }
+            self._log_queue.append(log_entry)
+            # Notify callbacks (server will register one)
+            for cb in self._log_cbs:
+                try:
+                    cb(log_entry)
+                except Exception:
+                    pass
+        except Exception:
+            self.handleError(record)
+    
+    def register_callback(self, callback: Callable) -> None:
+        """Register a callback to receive log updates."""
+        if callback not in self._log_cbs:
+            self._log_cbs.append(callback)
+    
+    def get_recent_logs(self, n: int = 50) -> List[dict]:
+        """Get recent n log entries."""
+        return list(self._log_queue)[-n:]
+
+
+# Global log handler instance
+_ws_log_handler: Optional[WebSocketLogHandler] = None
+
+
+def setup_ws_logging() -> WebSocketLogHandler:
+    """Setup WebSocket log handler and attach to root logger."""
+    global _ws_log_handler
+    if _ws_log_handler is None:
+        _ws_log_handler = WebSocketLogHandler(max_logs=200)
+        _ws_log_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(message)s")
+        _ws_log_handler.setFormatter(formatter)
+        
+        # Attach to root logger
+        root_logger = logging.getLogger()
+        root_logger.addHandler(_ws_log_handler)
+        
+    return _ws_log_handler
+
+
+def get_ws_log_handler() -> Optional[WebSocketLogHandler]:
+    """Get the WebSocket log handler instance."""
+    return _ws_log_handler
+
+
+# =====================================================================
+# 4. SERVO EASING FUNCTIONS  (ServoEasing-style control)
+# =====================================================================
+def ease_in_out_cubic(t: float) -> float:
+    """Easing: ช้า→เร็ว→ช้า - smooth acceleration and deceleration.
+    
+    Args:
+        t: Linear progress 0.0 → 1.0
+    
+    Returns:
+        Eased progress 0.0 → 1.0
+    """
+    if t < 0.5:
+        return 4 * t * t * t  # ease in (slow start)
+    else:
+        f = -2 * t + 2
+        return 1 - (f * f * f) / 2  # ease out (slow end)
+
+
+@dataclass
+class ServoProfile:
+    """ServoEasing-style profile for a specific servo model."""
+    name: str
+    max_speed_dps: float      # Degrees per second
+    easing: Callable[[float], float]  # Easing function
+    settle_time: float        # Seconds to settle after movement
+    pwm_freq: int             # PWM frequency Hz
+
+
+# Servo-specific profiles (conservative speeds for loaded condition)
+SERVO_PROFILES = {
+    "MG995": ServoProfile(
+        name="MG995",
+        max_speed_dps=250,           # ~70% of rated 353°/s
+        easing=ease_in_out_cubic,     # ช้า→เร็ว→ช้า
+        settle_time=0.25,             # Analog needs longer
+        pwm_freq=50                   # Standard 50Hz
+    ),
+    "DS5180SSG": ServoProfile(
+        name="DS5180SSG",
+        max_speed_dps=500,           # ~65% of rated 750°/s
+        easing=ease_in_out_cubic,     # ช้า→เร็ว→ช้า
+        settle_time=0.15,             # Digital faster settle
+        pwm_freq=200                  # Digital servo optimized
+    )
+}
+
+
+# =====================================================================
+# 4. DETECTION STATE MACHINE
 # =====================================================================
 class DetectionState(Enum):
     IDLE         = "idle"
@@ -637,6 +755,31 @@ class HardwareController:
         self._last_angle[Config.SERVO1_PIN] = float(Config.CAP_HOME_ANGLE)
         self._last_angle[Config.SERVO2_PIN] = float(Config.SORT_HOME_ANGLE)
 
+    def return_to_home_eased(self) -> None:
+        """Guaranteed home using ServoEasing profiles.
+        
+        Uses servo-specific speeds and settle times:
+        - MG995: 250°/s, 0.25s settle
+        - DS5180SSG: 500°/s, 0.15s settle
+        
+        Ends with re-command to catch any sag/overshoot.
+        """
+        logger.info("Returning to home with easing...")
+        
+        # Phase 1: Move to home with easing (profile-specific)
+        self.move_eased(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, SERVO_PROFILES["MG995"])
+        self.move_eased(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, SERVO_PROFILES["DS5180SSG"])
+        
+        # Phase 2: Final re-command to catch any sag
+        time.sleep(0.1)
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
+        self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
+        
+        # Phase 3: Final settle (use slower servo's settle time)
+        time.sleep(0.15)
+        
+        logger.info("Home return complete")
+
     def smooth_move(
         self,
         pin: int,
@@ -705,6 +848,74 @@ class HardwareController:
             "Servo pin=%d target=%.0f° start=%.0f° duration=%.2fs",
             pin, target, start, time.monotonic() - start_time
         )
+
+    def move_eased(
+        self,
+        pin: int,
+        target: float,
+        profile: ServoProfile = None,
+    ) -> None:
+        """ServoEasing-style movement with profile-based speed and easing.
+        
+        Uses EASE_IN_OUT_CUBIC (ช้า→เร็ว→ช้า) for smooth acceleration/deceleration.
+        Updates at 50Hz with servo-specific settle time.
+        
+        Args:
+            pin: GPIO pin for servo
+            target: Target angle (0-180)
+            profile: ServoProfile (auto-detects from pin if None)
+        """
+        # Auto-select profile based on pin
+        if profile is None:
+            profile = SERVO_PROFILES["MG995"] if pin == Config.SERVO1_PIN else SERVO_PROFILES["DS5180SSG"]
+        
+        home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
+        start = self._last_angle.get(pin)
+        
+        if start is None:
+            # Unknown position — force a slow home first, then proceed
+            self.warmup_servo(pin)
+            self.move_servo(pin, home_angle)
+            time.sleep(Config.HOME_ALL_DELAY_S)
+            start = home_angle
+            self._last_angle[pin] = start
+        
+        target = float(round(target))
+        distance = abs(target - start)
+        
+        if distance < 1.0:
+            self.move_servo(pin, target)
+            time.sleep(profile.settle_time)
+            self._last_angle[pin] = target
+            return
+        
+        # Calculate timing based on profile speed (°/s)
+        duration = distance / profile.max_speed_dps
+        duration = max(0.1, duration)  # Minimum 100ms
+        
+        num_steps = max(1, int(duration * Config.SERVO_UPDATE_HZ))
+        direction = 1 if target > start else -1
+        
+        logger.debug("move_eased: %s pin=%d %.0f°→%.0f° (%.0f°/s, %d steps)",
+                     profile.name, pin, start, target, profile.max_speed_dps, num_steps)
+        
+        # Execute eased movement at 50Hz
+        for step in range(num_steps + 1):
+            t_linear = step / num_steps
+            t_eased = profile.easing(t_linear)  # EASE_IN_OUT_CUBIC
+            
+            angle = start + direction * distance * t_eased
+            self.move_servo(pin, round(angle))
+            
+            if step < num_steps:
+                time.sleep(1.0 / Config.SERVO_UPDATE_HZ)  # 20ms @ 50Hz
+        
+        # Post-move settle (servo-specific)
+        if profile.settle_time > 0:
+            time.sleep(profile.settle_time)
+        
+        self._last_angle[pin] = float(target)
+        logger.debug("move_eased complete: pin=%d at %.0f°", pin, target)
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
@@ -857,6 +1068,7 @@ class SmartBinEngine:
         self._cam: Optional[CameraStream] = None
         self._esp32_ip: str = ""
         self._cv2_ok: bool = True   # flipped False on first headless cv2.error
+        self._cycle_count = 0       # For periodic auto-rehome
         self._load_config()
 
     def _load_config(self) -> None:
@@ -1061,6 +1273,13 @@ class SmartBinEngine:
                         state = DetectionState.PROCESSING
                         logger.info("Hand withdrawn — starting pipeline")
                         self._process_detection()
+                        self._cycle_count += 1
+                        
+                        # Auto-rehome every 3 cycles to prevent drift accumulation
+                        if self._cycle_count % 3 == 0 and self._hw:
+                            logger.info("Periodic re-home (cycle %d)", self._cycle_count)
+                            self._hw.return_to_home_eased()
+                        
                         last_cooldown_end = time.monotonic()
                         state = DetectionState.COOLDOWN
                         if system_state:
@@ -1184,8 +1403,8 @@ class SmartBinEngine:
 
         try:
             # Stage 0 — Move capture arm to photo position (120°)
-            # smooth_move already includes SERVO_SETTLE_TIME_S after reaching target
-            hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=35.0)
+            # Using ServoEasing-style control with EASE_IN_OUT_CUBIC
+            hw.move_eased(Config.SERVO1_PIN, Config.PHOTO_ANGLE, SERVO_PROFILES["MG995"])
             # Extra settle specifically for the capture arm (mechanical load may vary)
             time.sleep(Config.PHOTO_SETTLE_DELAY)
 
@@ -1213,23 +1432,26 @@ class SmartBinEngine:
             self._record_sort(label, conf, elapsed_ms)
 
             # Stage 1: Reset Arm to Neutral
-            hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=30.0)
+            hw.move_eased(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, SERVO_PROFILES["MG995"])
 
             # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
-            hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
+            hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
 
             # Stage 3: Drop (Servo 1)
             time.sleep(0.2)
-            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
+            hw.move_eased(Config.SERVO1_PIN, Config.SWEEP_ANGLE, SERVO_PROFILES["MG995"])
             time.sleep(0.6)
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
         finally:
-            # CRITICAL: Always return both servos to Home / Center
-            hw.return_to_home()
-            hw.idle_servos(force=True)
+            # CRITICAL FIX: Use eased home return with proper settle before idle
+            # This prevents servo from being cut off mid-movement
+            hw.return_to_home_eased()
+            # CRITICAL: Wait for mechanical settle before idling PWM
+            time.sleep(0.2)
+            hw.idle_servos(force=False)  # Soft idle, not forced
             logger.info("[t=%.3f] Pipeline finished & Reset", time.monotonic() - t0)
 
     # ── helpers ───────────────────────────────────────────────────────

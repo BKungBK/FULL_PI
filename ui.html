@@ -449,6 +449,92 @@ table.mt tr:hover td{background:var(--s2)}
 .eval-good      { color: #5b9cf6; }
 .eval-fair      { color: #f5a623; }
 .eval-poor      { color: #f2718a; }
+
+/* ── System Logs ─────────────────────────────────────────── */
+.syslog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--s2);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.syslog-header:hover { background: var(--s3); }
+.syslog-body {
+  max-height: 400px;
+  overflow: hidden;
+  transition: max-height .3s ease;
+}
+.syslog-body.collapsed { max-height: 0; }
+.syslog-filters {
+  display: flex;
+  gap: 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--bd);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.log-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--t2);
+}
+.log-filter input { cursor: pointer; }
+.lvl-info    { color: var(--t1); }
+.lvl-debug   { color: #7dd3fc; }
+.lvl-warning { color: var(--warn); }
+.lvl-error   { color: var(--err); }
+.syslog-content {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.syslog-row {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.syslog-row:last-child { border-bottom: none; }
+.syslog-time {
+  color: var(--t3);
+  flex-shrink: 0;
+  width: 60px;
+}
+.syslog-level {
+  flex-shrink: 0;
+  width: 40px;
+  font-weight: 500;
+}
+.syslog-msg {
+  color: var(--t1);
+  word-break: break-word;
+}
+.log-badge {
+  background: var(--err);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+}
+#syslog-toggle {
+  color: var(--t2);
+  font-size: 10px;
+  transition: transform .2s;
+}
+#syslog-toggle.collapsed { transform: rotate(-90deg); }
 </style>
 </head>
 <body>
@@ -464,6 +550,7 @@ table.mt tr:hover td{background:var(--s2)}
   <div id="nav">
     <button class="nb on"  data-p="dash">Dashboard</button>
     <button class="nb"     data-p="ctrl">Control</button>
+    <button class="nb"     data-p="logs">Logs</button>
     <button class="nb"     data-p="anl" >Analytics</button>
     <button class="nb"     data-p="set" >Settings</button>
   </div>
@@ -569,6 +656,31 @@ table.mt tr:hover td{background:var(--s2)}
     </div>
   </div>
 
+  <!-- System Logs (collapsible) -->
+  <div class="card" id="syslog-card">
+    <div class="syslog-header" onclick="toggleSyslog()">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="clabel" style="margin:0">System Logs</span>
+        <span id="syslog-badge" class="log-badge" style="display:none">0</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn btn-sm btn-w" onclick="event.stopPropagation();clearSyslog()">Clear</button>
+        <span id="syslog-toggle">▼</span>
+      </div>
+    </div>
+    <div class="syslog-body" id="syslog-body">
+      <div class="syslog-filters">
+        <label class="log-filter"><input type="checkbox" id="filter-info" checked onchange="renderSyslog()"> <span class="lvl-info">INFO</span></label>
+        <label class="log-filter"><input type="checkbox" id="filter-debug" onchange="renderSyslog()"> <span class="lvl-debug">DEBUG</span></label>
+        <label class="log-filter"><input type="checkbox" id="filter-warning" checked onchange="renderSyslog()"> <span class="lvl-warning">WARN</span></label>
+        <label class="log-filter"><input type="checkbox" id="filter-error" checked onchange="renderSyslog()"> <span class="lvl-error">ERROR</span></label>
+      </div>
+      <div class="syslog-content" id="syslog-content">
+        <div class="syslog-row"><span class="syslog-time">--:--:--</span><span class="syslog-msg" style="color:var(--t2)">Waiting for logs...</span></div>
+      </div>
+    </div>
+  </div>
+
 </div><!-- /p-dash -->
 
 <!-- ══════════════════════════════════════════════════════════
@@ -667,6 +779,34 @@ table.mt tr:hover td{background:var(--s2)}
   </div>
 
 </div><!-- /p-ctrl -->
+
+<!-- ══════════════════════════════════════════════════════════
+     LOGS
+══════════════════════════════════════════════════════════ -->
+<div id="p-logs" class="panel">
+  <div class="card" style="height:calc(100vh - 80px);display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--bd)">
+      <div class="clabel" style="margin:0">System Logs (Real-time)</div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div class="syslog-filters" style="padding:0;border:none">
+          <label class="log-filter"><input type="checkbox" id="full-filter-info" checked onchange="renderFullSyslog()"> <span class="lvl-info">INFO</span></label>
+          <label class="log-filter"><input type="checkbox" id="full-filter-debug" onchange="renderFullSyslog()"> <span class="lvl-debug">DEBUG</span></label>
+          <label class="log-filter"><input type="checkbox" id="full-filter-warning" checked onchange="renderFullSyslog()"> <span class="lvl-warning">WARN</span></label>
+          <label class="log-filter"><input type="checkbox" id="full-filter-error" checked onchange="renderFullSyslog()"> <span class="lvl-error">ERROR</span></label>
+        </div>
+        <button class="btn btn-sm btn-w" onclick="clearSyslog();renderFullSyslog()">Clear All</button>
+      </div>
+    </div>
+    <div class="syslog-content" id="full-syslog-content" style="flex:1;max-height:none">
+      <div class="syslog-row"><span class="syslog-time">--:--:--</span><span class="syslog-msg" style="color:var(--t2)">Waiting for logs...</span></div>
+    </div>
+    <div style="padding-top:12px;border-top:1px solid var(--bd);font-family:var(--mono);font-size:10px;color:var(--t2);display:flex;gap:20px">
+      <span id="log-stats-total">Total: 0</span>
+      <span id="log-stats-filtered">Shown: 0</span>
+      <span id="log-stats-errors" style="color:var(--err)">Errors: 0</span>
+    </div>
+  </div>
+</div>
 
 <!-- ══════════════════════════════════════════════════════════
      ANALYTICS
@@ -910,6 +1050,10 @@ document.querySelectorAll('.nb').forEach(b => {
     b.classList.add('on');
     document.getElementById(`p-${b.dataset.p}`).classList.add('on');
     if (b.dataset.p === 'anl') loadAnalytics();
+    if (b.dataset.p === 'logs') { renderFullSyslog(); setTimeout(() => {
+      const content = document.getElementById('full-syslog-content');
+      if (content) content.scrollTop = content.scrollHeight;
+    }, 50); }
   });
 });
 
@@ -923,10 +1067,11 @@ function connect() {
   ws.onerror = () => wsUi(false);
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
-    if      (m.type==='init')        { snap=m.snap||{}; renderSnap(); }
+    if      (m.type==='init')        { snap=m.snap||{}; renderSnap(); if(m.logs) initSyslog(m.logs); }
     else if (m.type==='tick')        { renderTick(m); }
     else if (m.type==='sort_result') { renderSort(m); }
     else if (m.type==='bin_levels')  { renderBins(m.levels); }
+    else if (m.type==='log')         { addSyslogEntry(m.log); }
     else if (m.type==='update_analytics') {
       if (document.getElementById('p-anl').classList.contains('on')) {
          loadAnalytics();
@@ -945,6 +1090,196 @@ function wsUi(ok) {
   document.getElementById('s-ws').textContent = ok ? 'Connected' : 'Disconnected';
   document.getElementById('s-conn-dot').className = `conn-dot ${ok?'ok':'err'}`;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   SYSTEM LOGS
+═══════════════════════════════════════════════════════════ */
+let syslogEntries = [];
+let syslogCollapsed = false;
+let syslogUnreadErrors = 0;
+
+function initSyslog(initialLogs) {
+  syslogEntries = initialLogs || [];
+  renderSyslog();
+}
+
+function addSyslogEntry(entry) {
+  if (!entry) return;
+  syslogEntries.push(entry);
+  // Keep only last 100 entries
+  if (syslogEntries.length > 100) {
+    syslogEntries = syslogEntries.slice(-100);
+  }
+  
+  // Count unread errors
+  if (entry.level === 'ERROR' || entry.level === 'WARNING') {
+    syslogUnreadErrors++;
+    updateSyslogBadge();
+  }
+  
+  renderSyslog();
+  
+  // Auto-scroll to bottom if not collapsed
+  if (!syslogCollapsed) {
+    const content = document.getElementById('syslog-content');
+    if (content) {
+      content.scrollTop = content.scrollHeight;
+    }
+  }
+}
+
+function renderSyslog() {
+  const content = document.getElementById('syslog-content');
+  if (!content) return;
+  
+  // Get filter states
+  const showInfo = document.getElementById('filter-info')?.checked ?? true;
+  const showDebug = document.getElementById('filter-debug')?.checked ?? false;
+  const showWarning = document.getElementById('filter-warning')?.checked ?? true;
+  const showError = document.getElementById('filter-error')?.checked ?? true;
+  
+  const levelMap = {
+    'INFO': showInfo,
+    'DEBUG': showDebug,
+    'WARNING': showWarning,
+    'ERROR': showError
+  };
+  
+  const levelClass = {
+    'INFO': 'lvl-info',
+    'DEBUG': 'lvl-debug',
+    'WARNING': 'lvl-warning',
+    'ERROR': 'lvl-error'
+  };
+  
+  const filtered = syslogEntries.filter(e => levelMap[e.level]);
+  
+  if (filtered.length === 0) {
+    content.innerHTML = '<div class="syslog-row"><span class="syslog-time">--:--:--</span><span class="syslog-msg" style="color:var(--t2)">No logs to display</span></div>';
+    return;
+  }
+  
+  content.innerHTML = filtered.map(e => `
+    <div class="syslog-row">
+      <span class="syslog-time">${e.time}</span>
+      <span class="syslog-level ${levelClass[e.level] || 'lvl-info'}">${e.level}</span>
+      <span class="syslog-msg">${escapeHtml(e.message)}</span>
+    </div>
+  `).join('');
+}
+
+function toggleSyslog() {
+  const body = document.getElementById('syslog-body');
+  const toggle = document.getElementById('syslog-toggle');
+  if (!body || !toggle) return;
+  
+  syslogCollapsed = !syslogCollapsed;
+  
+  if (syslogCollapsed) {
+    body.classList.add('collapsed');
+    toggle.classList.add('collapsed');
+    toggle.textContent = '▼';
+  } else {
+    body.classList.remove('collapsed');
+    toggle.classList.remove('collapsed');
+    toggle.textContent = '▼';
+    // Clear unread errors when opening
+    syslogUnreadErrors = 0;
+    updateSyslogBadge();
+    // Scroll to bottom
+    setTimeout(() => {
+      const content = document.getElementById('syslog-content');
+      if (content) content.scrollTop = content.scrollHeight;
+    }, 50);
+  }
+}
+
+function clearSyslog() {
+  syslogEntries = [];
+  syslogUnreadErrors = 0;
+  updateSyslogBadge();
+  renderSyslog();
+}
+
+function updateSyslogBadge() {
+  const badge = document.getElementById('syslog-badge');
+  if (!badge) return;
+  
+  if (syslogUnreadErrors > 0 && syslogCollapsed) {
+    badge.textContent = syslogUnreadErrors > 99 ? '99+' : syslogUnreadErrors;
+    badge.style.display = 'inline-block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function renderFullSyslog() {
+  const content = document.getElementById('full-syslog-content');
+  if (!content) return;
+  
+  // Get filter states
+  const showInfo = document.getElementById('full-filter-info')?.checked ?? true;
+  const showDebug = document.getElementById('full-filter-debug')?.checked ?? false;
+  const showWarning = document.getElementById('full-filter-warning')?.checked ?? true;
+  const showError = document.getElementById('full-filter-error')?.checked ?? true;
+  
+  const levelMap = {
+    'INFO': showInfo,
+    'DEBUG': showDebug,
+    'WARNING': showWarning,
+    'ERROR': showError
+  };
+  
+  const levelClass = {
+    'INFO': 'lvl-info',
+    'DEBUG': 'lvl-debug',
+    'WARNING': 'lvl-warning',
+    'ERROR': 'lvl-error'
+  };
+  
+  const filtered = syslogEntries.filter(e => levelMap[e.level]);
+  const errorCount = syslogEntries.filter(e => e.level === 'ERROR').length;
+  
+  // Update stats
+  document.getElementById('log-stats-total').textContent = `Total: ${syslogEntries.length}`;
+  document.getElementById('log-stats-filtered').textContent = `Shown: ${filtered.length}`;
+  document.getElementById('log-stats-errors').textContent = `Errors: ${errorCount}`;
+  
+  if (filtered.length === 0) {
+    content.innerHTML = '<div class="syslog-row"><span class="syslog-time">--:--:--</span><span class="syslog-msg" style="color:var(--t2)">No logs to display</span></div>';
+    return;
+  }
+  
+  content.innerHTML = filtered.map(e => `
+    <div class="syslog-row">
+      <span class="syslog-time">${e.time}</span>
+      <span class="syslog-level ${levelClass[e.level] || 'lvl-info'}">${e.level}</span>
+      <span class="syslog-msg">${escapeHtml(e.message)}</span>
+    </div>
+  `).join('');
+}
+
+// Hook into addSyslogEntry to also update full panel
+const originalAddSyslogEntry = addSyslogEntry;
+addSyslogEntry = function(entry) {
+  originalAddSyslogEntry(entry);
+  // Also update full panel if visible
+  const logsPanel = document.getElementById('p-logs');
+  if (logsPanel && logsPanel.classList.contains('on')) {
+    renderFullSyslog();
+    // Auto-scroll full panel
+    const content = document.getElementById('full-syslog-content');
+    if (content) {
+      content.scrollTop = content.scrollHeight;
+    }
+  }
+};
 
 /* ═══════════════════════════════════════════════════════════
    RENDER

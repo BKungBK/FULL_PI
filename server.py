@@ -190,6 +190,39 @@ def _on_sort_event(snap: dict) -> None:
 system_state.register_sort_callback(_on_sort_event)
 
 # =====================================================================
+# WebSocket Log Broadcast
+# =====================================================================
+def _on_log_event(log_entry: dict) -> None:
+    """Callback for log events — broadcasts to all WebSocket clients."""
+    payload = {
+        "type": "log",
+        "log": log_entry
+    }
+    if _server_loop is not None:
+        asyncio.run_coroutine_threadsafe(_broadcast(payload), _server_loop)
+
+
+def _register_log_handler() -> None:
+    """Register log callback with main module's WebSocketLogHandler."""
+    try:
+        import main as eng
+        handler = eng.get_ws_log_handler()
+        if handler:
+            handler.register_callback(_on_log_event)
+            logger.info("WebSocket log handler registered")
+        else:
+            # If handler not ready yet, try to set it up
+            handler = eng.setup_ws_logging()
+            handler.register_callback(_on_log_event)
+            logger.info("WebSocket log handler initialized and registered")
+    except Exception as exc:
+        logger.warning("Could not register log handler: %s", exc)
+
+
+# Register after engine starts (called from lifespan)
+_register_log_handler()
+
+# =====================================================================
 # REST endpoints — static
 # =====================================================================
 
@@ -581,10 +614,22 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
     # Initial full load
     snap = system_state.snapshot()
+    
+    # Get recent logs for new connection
+    recent_logs = []
+    try:
+        import main as eng
+        handler = eng.get_ws_log_handler()
+        if handler:
+            recent_logs = handler.get_recent_logs(50)
+    except Exception:
+        pass
+    
     await ws.send_json({
         "type":    "init",
         "snap":    snap,
         "engine":  _engine_running(),
+        "logs":    recent_logs,
     })
 
     try:
