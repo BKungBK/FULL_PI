@@ -26,23 +26,19 @@ import base64
 import math
 import os
 import signal
-from dataclasses import dataclass
-from typing import Callable, List
-from collections import deque
+from dataclasses import dataclass, field
+from typing import Callable, List, Dict, Optional, Tuple
+from collections import deque, Counter
+from enum import Enum
+from pathlib import Path
 import socket
 import sys
 import threading
 import time
-from collections import Counter
-from dataclasses import field
-from enum import Enum
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 # ── third-party ───────────────────────────────────────────────────────
 import cv2
 import lgpio
-import ncnn
 import numpy as np
 import requests
 import tflite_runtime.interpreter as tflite
@@ -105,7 +101,7 @@ class Config:
     TFLITE_THREADS: int = 4
     VOTE_FRAMES: int = 5
     # Class labels will be loaded dynamically from labels.txt.
-    CLASS_NAMES: List[str] = field(default_factory=list)
+    CLASS_NAMES: List[str] = []
 
     # ── ROI window (Ignored in TM mode, but kept for compatibility) ────
     ROI_ENABLED: bool = True
@@ -274,6 +270,7 @@ class SmartServoLock:
         self._stop_lock = threading.Event()
         self._locked_pin: Optional[int] = None
         self._locked_angle: float = 0.0
+        self._locked_profile: Optional[ServoProfile] = None
         
     def start_lock(self, pin: int, angle: float, profile: ServoProfile) -> None:
         """
@@ -287,32 +284,33 @@ class SmartServoLock:
         
         self._locked_pin = pin
         self._locked_angle = angle
+        self._locked_profile = profile
         self._lock_active = True
         self._stop_lock.clear()
         
         # Set initial position
-        self._hw.move_servo(pin, angle)
+        self._hw.move_servo(pin, angle, profile)
         
         # Start lock thread with appropriate strategy
         if profile.name == "MG995":
             # Analog servo: safe for long-term holding with periodic refresh
             self._lock_thread = threading.Thread(
                 target=self._analog_lock_loop,
-                args=(pin, angle),
+                args=(pin, angle, profile),
                 daemon=True
             )
         else:
             # Digital servo: shorter hold then idle to prevent heat
             self._lock_thread = threading.Thread(
                 target=self._digital_lock_loop,
-                args=(pin, angle),
+                args=(pin, angle, profile),
                 daemon=True
             )
         
         self._lock_thread.start()
         logger.info("SmartLock: Started on pin=%d at %.1f° (%s)", pin, angle, profile.name)
     
-    def _analog_lock_loop(self, pin: int, angle: float) -> None:
+    def _analog_lock_loop(self, pin: int, angle: float, profile: ServoProfile) -> None:
         """
         Lock loop for analog servos (MG995).
         
@@ -324,7 +322,7 @@ class SmartServoLock:
         
         while not self._stop_lock.is_set():
             # Re-command position (analog servo will only draw current if forced)
-            self._hw.move_servo(pin, angle)
+            self._hw.move_servo(pin, angle, profile)
             
             # Update tracking
             self._hw._last_angle[pin] = float(angle)
@@ -334,7 +332,7 @@ class SmartServoLock:
         
         logger.debug("SmartLock: Analog lock loop ended for pin=%d", pin)
     
-    def _digital_lock_loop(self, pin: int, angle: float) -> None:
+    def _digital_lock_loop(self, pin: int, angle: float, profile: ServoProfile) -> None:
         """
         Lock loop for digital servos (DS5180SSG).
         
@@ -346,7 +344,7 @@ class SmartServoLock:
         start_time = time.perf_counter()
         
         while not self._stop_lock.is_set() and (time.perf_counter() - start_time) < firm_hold_duration:
-            self._hw.move_servo(pin, angle)
+            self._hw.move_servo(pin, angle, profile)
             self._hw._last_angle[pin] = float(angle)
             self._stop_lock.wait(timeout=0.05)  # 50ms refresh
         
@@ -357,7 +355,7 @@ class SmartServoLock:
         low_power_interval = 0.5  # 500ms refresh
         
         while not self._stop_lock.is_set():
-            self._hw.move_servo(pin, angle)
+            self._hw.move_servo(pin, angle, profile)
             self._hw._last_angle[pin] = float(angle)
             self._stop_lock.wait(timeout=low_power_interval)
         
@@ -408,6 +406,8 @@ class ServoProfile:
     easing: Callable[[float], float]  # Easing function
     settle_time: float        # Seconds to settle after movement
     pwm_freq: int             # PWM frequency Hz
+    min_pulse_us: int         # Min pulse width (e.g., 500 or 1000)
+    max_pulse_us: int         # Max pulse width (e.g., 2000 or 2500)
 
 
 # Servo-specific profiles (conservative speeds for loaded condition)
@@ -417,20 +417,24 @@ SERVO_PROFILES = {
         max_speed_dps=250,           # ~70% of rated 353°/s
         easing=ease_in_out_cubic,     # ช้า→เร็ว→ช้า
         settle_time=0.25,             # Analog needs longer
-        pwm_freq=50                   # Standard 50Hz
+        pwm_freq=50,                  # Standard 50Hz
+        min_pulse_us=1000,            # Safe for analog (avoid stall at edges)
+        max_pulse_us=2000             # Safe max to prevent over-travel
     ),
     "DS5180SSG": ServoProfile(
         name="DS5180SSG",
         max_speed_dps=500,           # ~65% of rated 750°/s
         easing=ease_in_out_cubic,     # ช้า→เร็ว→ช้า
         settle_time=0.15,             # Digital faster settle
-        pwm_freq=200                  # Digital servo optimized
+        pwm_freq=200,                 # Digital servo optimized
+        min_pulse_us=500,             # Digital servo full range
+        max_pulse_us=2500             # Full 180° range
     )
 }
 
 
 # =====================================================================
-# 4. DETECTION STATE MACHINE
+# 6. DETECTION STATE MACHINE
 # =====================================================================
 class DetectionState(Enum):
     IDLE         = "idle"
@@ -440,7 +444,7 @@ class DetectionState(Enum):
 
 
 # =====================================================================
-# 4. ROI HELPER
+# 7. ROI HELPER
 # =====================================================================
 def crop_roi(frame: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
     """Crop ROI from *frame* using current Config settings.
@@ -463,7 +467,7 @@ def crop_roi(frame: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
 
 
 # =====================================================================
-# 5. MODEL LOADING
+# 8. MODEL LOADING
 # =====================================================================
 
 
@@ -527,57 +531,8 @@ def initialize_models() -> None:
         output_detail["shape"],
     )
 
-
+# 9. AI INFERENCE FUNCTIONS
 # =====================================================================
-# 6. AI INFERENCE FUNCTIONS  (verbatim from spec)
-# =====================================================================
-
-# ── NCNN YOLO (reserved for future use) ──────────────────────────────
-
-@dataclass
-class LetterboxInfo:
-    scale: float
-    pad_left: int
-    pad_top: int
-    orig_h: int
-    orig_w: int
-
-
-def preprocess_yolo(frame: np.ndarray) -> Tuple[np.ndarray, LetterboxInfo]:
-    """Preprocess frame for YOLO NCNN input (letterbox resize, RGB CHW float32).
-
-    NOTE: This function is reserved for future NCNN pipeline integration.
-    The current detection pipeline uses classify_single_frame() → TFLite only.
-    """
-    h, w = frame.shape[:2]
-    size = Config.YOLO_INPUT_SIZE
-
-    # Calculate scale and padding
-    scale = min(size / h, size / w)
-    new_h = max(1, int(round(h * scale)))
-    new_w = max(1, int(round(w * scale)))
-
-    # Resize
-    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-
-    # Create padded image (letterbox)
-    padded = np.full((size, size, 3), 114, dtype=np.uint8)
-    top = (size - new_h) // 2
-    left = (size - new_w) // 2
-    padded[top:top + new_h, left:left + new_w] = resized
-
-    rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
-    input_tensor = np.ascontiguousarray(
-        np.transpose(rgb.astype(np.float32) / 255.0, (2, 0, 1))
-    )
-    return input_tensor, LetterboxInfo(
-        scale=scale,
-        pad_left=left,
-        pad_top=top,
-        orig_h=h,
-        orig_w=w,
-    )
-
 
 def apply_clahe(img: np.ndarray) -> np.ndarray:
     """Apply CLAHE adaptive contrast enhancement. (Matches dataset_tool.py)"""
@@ -595,14 +550,17 @@ def prepare_image(img: np.ndarray) -> np.ndarray:
     y = (h_img - size) // 2
     
     square = img[y : y + size, x : x + size]
-    resized240 = cv2.resize(square, (240, 240))
     margin = 8
-    roi224 = resized240[margin : 240 - margin, margin : 240 - margin]
+    roi224 = square[margin : size - margin, margin : size - margin]
     return roi224
 
 
 def predict(img: np.ndarray) -> Tuple[str, float]:
-    """Run Teachable Machine float32 standard inference."""
+    """Run Teachable Machine float32 standard inference.
+    
+    Args:
+        img: Input image (already 224x224 from prepare_image)
+    """
     try:
         interpreter = g_state.classifier_interpreter
         if interpreter is None:
@@ -611,9 +569,7 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
 
-        # ปรับให้ตรงกับขนาด input model ทั่วไป
-        img_resized = cv2.resize(img, (224, 224)) 
-        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
         image_array = np.asarray(img_rgb)
         
@@ -669,14 +625,6 @@ def predict(img: np.ndarray) -> Tuple[str, float]:
         return "reject", 0.0
 
 
-def _encode_jpg_b64(img: np.ndarray, quality: int = 85) -> str:
-    """Encode an OpenCV BGR image to base64 JPEG string."""
-    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-    if not ok:
-        return ""
-    return base64.b64encode(buf).decode("ascii")
-
-
 def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
     """Full pipeline: extract ROI + prepare image + classify one frame."""
     roi_frame, roi_coords = crop_roi(frame)
@@ -692,65 +640,8 @@ def classify_single_frame(frame: np.ndarray) -> Tuple[str, float]:
     return predict(processed)
 
 
-def classify_with_voting(frames: List[np.ndarray]) -> Tuple[str, float, float]:
-    """
-    Run 5-shot voting classification using sequential execution.
-
-    OPTIMIZATION: Sequential is faster than ThreadPoolExecutor because:
-    1. GIL prevents true parallelism for CPU-bound TFLite inference
-    2. ThreadPoolExecutor has overhead (thread creation, context switching)
-    3. TFLite already uses num_threads=4 for intra-op parallelism
-    4. Sequential avoids the overhead of 5 thread creations
-
-    Returns (majority_vote_class, avg_confidence, elapsed_ms).
-    """
-    if len(frames) < Config.VOTE_FRAMES:
-        logging.warning(
-            "Not enough frames for voting: %d < %d", len(frames), Config.VOTE_FRAMES
-        )
-        # Pad with last frame
-        while len(frames) < Config.VOTE_FRAMES:
-            frames.append(frames[-1])
-
-    # OPTIMIZATION: Sequential execution with TFLite intra-op parallelism
-    # This is faster than ThreadPoolExecutor due to GIL limitations
-    votes: List[str] = []
-    confidences: List[float] = []
-    start_time = time.time()
-
-    for i in range(Config.VOTE_FRAMES):
-        try:
-            cls, conf = classify_single_frame(frames[i])
-            votes.append(cls)
-            confidences.append(conf)
-            logging.debug("Frame %d: %s (%.2f)", i, cls, conf)
-        except Exception as e:
-            logging.error("Inference failed for frame %d: %s", i, e)
-            votes.append("reject")  # Fail safe
-            confidences.append(0.0)
-
-    elapsed_ms = (time.time() - start_time) * 1000
-
-    # Majority vote
-    if not votes:
-        return "reject", 0.0, elapsed_ms
-
-    vote_counts = Counter(votes)
-    winner = vote_counts.most_common(1)[0][0]
-
-    # Average confidence of the winning class
-    winner_confs = [c for v, c in zip(votes, confidences) if v == winner]
-    avg_conf = sum(winner_confs) / len(winner_confs) if winner_confs else 0.0
-
-    logging.info(
-        "Voting result: %s (conf=%.2f) in %.1fms (distribution: %s)",
-        winner, avg_conf, elapsed_ms, dict(vote_counts),
-    )
-    return winner, avg_conf, elapsed_ms
-
-
 # =====================================================================
-# 7. NETWORK SCANNER
+# 10. NETWORK SCANNER
 # =====================================================================
 class NetworkScanner:
     """Discover the ESP32-CAM on the local /24 subnet."""
@@ -809,7 +700,7 @@ class NetworkScanner:
 
 
 # =====================================================================
-# 8. HARDWARE CONTROLLER
+# 11. HARDWARE CONTROLLER
 # =====================================================================
 class HardwareController:
     """GPIO, servos, and HC-SR04 ultrasonic sensors."""
@@ -820,6 +711,9 @@ class HardwareController:
             Config.SERVO1_PIN: None,
             Config.SERVO2_PIN: None,
         }
+        # CRITICAL FIX: Thread lock to prevent race condition
+        # SmartServoLock (background thread) vs Main Thread
+        self._servo_lock = threading.Lock()
         self._smart_lock = SmartServoLock(self)
         self._init_pins()
 
@@ -837,23 +731,51 @@ class HardwareController:
 
     # ── servo ─────────────────────────────────────────────────────────
 
-    def move_servo(self, pin: int, angle: float) -> None:
-        """Set servo to *angle* degrees (clamped 0–180)."""
+    def move_servo(self, pin: int, angle: float, profile: Optional[ServoProfile] = None) -> None:
+        """Set servo to *angle* degrees using Hardware PWM (clamped 0–180).
+        
+        CRITICAL FIX: Uses lgpio.tx_pwm with Hardware PWM instead of tx_servo
+        to eliminate jitter. Calculates pulse width based on profile specs.
+        
+        Args:
+            pin: GPIO pin for servo
+            angle: Target angle 0-180
+            profile: ServoProfile (auto-detects from pin if None)
+        
+        Thread-safe with _servo_lock to prevent race condition.
+        """
+        # Auto-detect profile if not provided
+        if profile is None:
+            profile = SERVO_PROFILES["MG995"] if pin == Config.SERVO1_PIN else SERVO_PROFILES["DS5180SSG"]
+        
+        # Clamp angle to valid range
         angle = max(0.0, min(180.0, angle))
-        pulse_us = int(500 + (angle / 180.0) * 2000)
-        lgpio.tx_servo(self._h, pin, pulse_us)
-        self._last_angle[pin] = angle
+        
+        # Calculate pulse width based on profile's min/max range
+        # Formula: pulse = min + (angle/180) * (max - min)
+        pulse_range = profile.max_pulse_us - profile.min_pulse_us
+        pulse_us = int(profile.min_pulse_us + (angle / 180.0) * pulse_range)
+        
+        # Calculate period in nanoseconds for Hardware PWM
+        period_ns = int(1_000_000_000 / profile.pwm_freq)
+        pulse_ns = pulse_us * 1000  # Convert us to ns
+        
+        # CRITICAL FIX: Hardware PWM via tx_pwm (no jitter, independent of CPU)
+        with self._servo_lock:
+            lgpio.tx_pwm(self._h, pin, profile.pwm_freq, int((pulse_ns / period_ns) * 100))
+            self._last_angle[pin] = angle
 
     def warmup_servo(self, pin: int) -> None:
         """Ensure PWM wave is active. Call after idle or before first move."""
         angle = self._last_angle.get(pin)
+        profile = SERVO_PROFILES["MG995"] if pin == Config.SERVO1_PIN else SERVO_PROFILES["DS5180SSG"]
         if angle is None:
             home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
             angle = home_angle
-            self.move_servo(pin, angle)
+            self.move_servo(pin, angle, profile)
             time.sleep(1.0)   # worst-case full sweep
         else:
-            self.move_servo(pin, angle)
+            self.move_servo(pin, angle, profile)
             time.sleep(0.05)  # 1+ PWM period to let wave stabilise
 
     def home_all(self) -> None:
@@ -861,7 +783,8 @@ class HardwareController:
         for pin, home in ((Config.SERVO1_PIN, Config.CAP_HOME_ANGLE),
                           (Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)):
             self.warmup_servo(pin)
-            self.move_servo(pin, home)
+            profile = SERVO_PROFILES["MG995"] if pin == Config.SERVO1_PIN else SERVO_PROFILES["DS5180SSG"]
+            self.move_servo(pin, home, profile)
             time.sleep(Config.HOME_ALL_DELAY_S)
             self._last_angle[pin] = float(home)
             logger.info("Home complete pin=%d angle=%.0f°", pin, home)
@@ -878,8 +801,10 @@ class HardwareController:
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
-        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
+        mg995 = SERVO_PROFILES["MG995"]
+        ds5180 = SERVO_PROFILES["DS5180SSG"]
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, mg995)
+        self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, ds5180)
 
         # Stage 3 — hold PWM alive so horn settles under load
         time.sleep(Config.HOME_VERIFY_DELAY_S)
@@ -950,11 +875,11 @@ class HardwareController:
                 
                 if not at_home1:
                     logger.warning("Servo1 not at home (current=%s°), re-commanding...", pos1)
-                    self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
+                    self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, mg995)
                 
                 if not at_home2:
                     logger.warning("Servo2 not at home (current=%s°), re-commanding...", pos2)
-                    self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
+                    self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, ds5180)
                 
                 time.sleep(0.1)
             else:
@@ -968,79 +893,39 @@ class HardwareController:
         target: float,
         speed: float = 30.0,
     ) -> None:
-        """Interpolate servo using a Delta-Time loop and Quartic Easing.
-
-        Updates at 50 Hz (matches PWM period) with 1-degree quantisation
-        to eliminate micro-jitter. After reaching target we sleep
-        SERVO_SETTLE_TIME_S so the horn mechanically damps out.
+        """DEPRECATED: Use move_eased() instead.
+        
+        This function is kept for backward compatibility and delegates
+to move_eased() with appropriate profile.
         """
-        home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
-        start = self._last_angle.get(pin)
-
-        if start is None:
-            # Unknown position — force a slow home first, then proceed
-            self.warmup_servo(pin)
-            self.move_servo(pin, home_angle)
-            time.sleep(Config.HOME_ALL_DELAY_S)
-            start = home_angle
-            self._last_angle[pin] = start
-
-        target = float(round(target))
-        distance = abs(target - start)
-
-        if distance < 1.0:
-            self.move_servo(pin, target)
-            time.sleep(Config.SERVO_SETTLE_TIME_S)
-            return
-
-        duration = distance / speed
-        duration = max(0.15, duration)
-
-        dt = 1.0 / Config.SERVO_UPDATE_HZ   # 20 ms
-        start_time = time.monotonic()
-
-        while True:
-            elapsed = time.monotonic() - start_time
-            t = min(1.0, elapsed / duration)
-
-            if t >= 1.0:
-                self.move_servo(pin, target)
-                break
-
-            if t < 0.5:
-                eased_t = 8.0 * (t ** 4)
-            else:
-                p = (-2.0 * t) + 2.0
-                eased_t = 1.0 - ((p ** 4) / 2.0)
-
-            current = start + (target - start) * eased_t
-
-            # Snap to target once we are within 1 degree
-            if abs(target - current) < 1.0:
-                self.move_servo(pin, target)
-                break
-
-            # Quantise to 1 degree — servo cannot resolve finer than this anyway
-            self.move_servo(pin, round(current))
-            time.sleep(dt)
-
-        # Mechanical settle — horn damps overshoot / ringing
-        time.sleep(Config.SERVO_SETTLE_TIME_S)
-        logger.debug(
-            "Servo pin=%d target=%.0f° start=%.0f° duration=%.2fs",
-            pin, target, start, time.monotonic() - start_time
-        )
+        logger.warning("smooth_move() is deprecated - use move_eased() instead")
+        
+        # Auto-select profile based on pin and use move_eased
+        profile = SERVO_PROFILES["MG995"] if pin == Config.SERVO1_PIN else SERVO_PROFILES["DS5180SSG"]
+        
+        # Calculate speed ratio for profile adjustment
+        # Default profile speed vs requested speed
+        speed_ratio = speed / profile.max_speed_dps
+        
+        # Temporarily adjust profile speed if significantly different
+        if abs(speed_ratio - 1.0) > 0.2:
+            from dataclasses import replace
+            adjusted_profile = replace(profile, max_speed_dps=speed)
+            self.move_eased(pin, target, adjusted_profile)
+        else:
+            self.move_eased(pin, target, profile)
 
     def move_eased(
         self,
         pin: int,
         target: float,
-        profile: ServoProfile = None,
+        profile: Optional[ServoProfile] = None,
     ) -> None:
-        """Step-based servo movement with easing (ช้า→เร็ว→ช้า).
+        """Delta-time servo movement with easing (ช้า→เร็ว→ช้า) - Resolution Bug Fixed.
         
-        CRITICAL FIX: Uses calculated step intervals instead of fixed time.sleep
-        to prevent jitter and ensure smooth motion.
+        CRITICAL FIX: Uses delta-time loop with time.monotonic() instead of
+        step-based time.sleep() to prevent Linux timing jitter.
+        Update rate is matched to servo profile's PWM frequency.
         
         Args:
             pin: GPIO pin for servo
@@ -1059,69 +944,63 @@ class HardwareController:
         if start is None:
             logger.warning("move_eased: Unknown position for pin=%d, warming up first", pin)
             self.warmup_servo(pin)
-            self.move_servo(pin, home_angle)
+            self.move_servo(pin, home_angle, profile)
             time.sleep(Config.HOME_ALL_DELAY_S)
             start = home_angle
             self._last_angle[pin] = start
         
-        # CRITICAL FIX: Round target to integer to prevent servo jitter
+        # CRITICAL FIX: Round to integer to prevent servo jitter
         target = int(round(float(target)))
         start = int(round(float(start)))
         distance = abs(target - start)
         
-        # CRITICAL FIX: If distance < 1.0, snap directly to target
-        # This prevents micro-jitter from floating point decimals
+        # If distance < 1.0, snap directly to target
         if distance < 1:
-            self.move_servo(pin, target)
+            self.move_servo(pin, target, profile)
             time.sleep(profile.settle_time)
             self._last_angle[pin] = float(target)
             logger.info("move_eased: snap move pin=%d → %d° (dist=%.1f°)", pin, target, distance)
             return
         
-        # Calculate movement parameters
-        # Time = distance / speed, with minimum for smooth acceleration
+        # Calculate movement duration
         duration = distance / profile.max_speed_dps
         duration = max(0.15, duration)  # Min 150ms for small moves
         
-        # CRITICAL FIX: Fixed step interval based on servo type
-        # MG995 (analog): needs fewer steps, slightly longer intervals
-        # DS5180SSG (digital): can handle more steps, shorter intervals
-        if profile.name == "MG995":
-            step_interval = 0.008  # 8ms per step for analog
-            num_steps = max(int(duration / step_interval), 5)
-        else:
-            step_interval = 0.005  # 5ms per step for digital
-            num_steps = max(int(duration / step_interval), 8)
-        
+        # CRITICAL FIX: Delta-time based update rate from PWM frequency
+        # MG995 (50Hz) → 20ms update period, DS5180SSG (200Hz) → 5ms update period
+        dt = 1.0 / profile.pwm_freq
         direction = 1 if target > start else -1
         
-        logger.info("move_eased: %s pin=%d %d°→%d° (dist=%d°, %d steps, %.3fs/step)",
-                    profile.name, pin, start, target, distance, num_steps, step_interval)
+        logger.info("move_eased: %s pin=%d %d°→%d° (dist=%d°, dur=%.2fs, dt=%.3fs, %dHz)",
+                    profile.name, pin, start, target, distance, duration, dt, profile.pwm_freq)
         
-        # Execute step-based movement with easing
+        # CRITICAL FIX: Delta-time loop (like smooth_move) - immune to OS timing jitter
+        start_time = time.monotonic()
         last_angle_sent = start
-        for step in range(num_steps + 1):
-            # Calculate eased progress (0→1 with smooth curve)
-            t_linear = step / num_steps
-            t_eased = profile.easing(t_linear)
+        
+        while True:
+            elapsed = time.monotonic() - start_time
+            t = min(1.0, elapsed / duration)
             
-            # Calculate angle for this step - ROUND TO INTEGER
+            if t >= 1.0:
+                # Final position
+                if last_angle_sent != target:
+                    self.move_servo(pin, target, profile)
+                    self._last_angle[pin] = float(target)
+                break
+            
+            # Calculate eased progress
+            t_eased = profile.easing(t)
             angle = int(round(start + direction * distance * t_eased))
             
-            # CRITICAL FIX: Only send if angle changed (prevent duplicate commands)
-            if angle != last_angle_sent or step == num_steps:
-                self.move_servo(pin, angle)
+            # Only send if angle changed (prevent duplicate commands)
+            if angle != last_angle_sent:
+                self.move_servo(pin, angle, profile)
                 self._last_angle[pin] = float(angle)
                 last_angle_sent = angle
             
-            # Fixed step interval - simpler and more reliable
-            if step < num_steps:
-                time.sleep(step_interval)
-        
-        # Final position command - ensure exact target
-        if last_angle_sent != target:
-            self.move_servo(pin, target)
-            self._last_angle[pin] = float(target)
+            # Sleep for next update period (dt from PWM frequency)
+            time.sleep(dt)
         
         # Servo-specific settle time
         if profile.settle_time > 0:
@@ -1199,7 +1078,7 @@ class HardwareController:
 
 
 # =====================================================================
-# 9. CAMERA STREAM  (thread-safe, rolling frame buffer)
+# 12. CAMERA STREAM  (thread-safe, rolling frame buffer)
 # =====================================================================
 class CameraStream(threading.Thread):
     """Background MJPEG grabber with a fixed-size rolling frame buffer.
@@ -1259,7 +1138,7 @@ class CameraStream(threading.Thread):
 
 
 # =====================================================================
-# 10. SMARTBIN ENGINE
+# 13. SMARTBIN ENGINE
 # =====================================================================
 class SmartBinEngine:
     """Top-level orchestrator.
@@ -1514,10 +1393,16 @@ class SmartBinEngine:
 
     def _handle_command(self, cmd: dict, hw: HardwareController) -> None:
         """Execute a control command received from the UI/server."""
+        t0 = time.monotonic()
         action = cmd.get("action", "")
         if action == "stop":
             self._running = False
         elif action == "servo":
+            # CRITICAL FIX: Stop smart lock before manual servo command (prevents race condition)
+            if hw._smart_lock.is_locked():
+                logger.debug("Stopping smart lock for manual servo command")
+                hw._smart_lock.stop_lock()
+            
             name  = cmd.get("name", "")
             # Determine appropriate home angle based on name
             home_angle = Config.CAP_HOME_ANGLE if name == "capture" else Config.SORT_HOME_ANGLE
@@ -1573,23 +1458,33 @@ class SmartBinEngine:
             self._save_config()
             logger.info("Config updated: %s", {k: cmd[k] for k in cmd if k != "action"})
         elif action == "manual_sort":
+            # CRITICAL FIX: Stop smart lock before manual sort (prevents race condition)
+            if hw._smart_lock.is_locked():
+                logger.debug("Stopping smart lock for manual sort")
+                hw._smart_lock.stop_lock()
+            
             cls = cmd.get("class", "reject")
-            logger.info("Manual sort triggered: %s", cls)
+            logger.info("[t=%.3f] Manual sort triggered: %s", time.monotonic() - t0, cls)
             target = self._label_to_angle(cls)
             try:
-                # Servo 2 (Sort): Move to target bin using eased motion
+                # Stage 1: Move servo2 to target bin
+                logger.info("[t=%.3f] Manual: Rotating bin to %d°", time.monotonic() - t0, target)
                 hw.move_eased(Config.SERVO2_PIN, target, SERVO_PROFILES["DS5180SSG"])
-                time.sleep(0.2)
-                # Servo 1 (Capture): Drop position
+                
+                # Stage 2: Drop
+                logger.info("[t=%.3f] Manual: Dropping...", time.monotonic() - t0)
                 hw.move_eased(Config.SERVO1_PIN, Config.SWEEP_ANGLE, SERVO_PROFILES["MG995"])
-                time.sleep(0.4)
+                time.sleep(0.5)  # Wait for drop
+                
             except Exception as exc:
-                logger.error("Manual sort servo error: %s", exc)
+                logger.error("[t=%.3f] Manual sort servo error: %s", time.monotonic() - t0, exc)
             finally:
-                # CRITICAL: Always return home with verification
-                hw.return_to_home_eased(verify=True)
-                time.sleep(0.3)  # Wait for settle before idling
+                # Return home, wait 2s, idle (same as auto)
+                logger.info("[t=%.3f] Manual: Returning home...", time.monotonic() - t0)
+                hw.return_to_home_eased(verify=False)
+                time.sleep(2.0)
                 hw.idle_servos(force=False)
+                logger.info("[t=%.3f] Manual: Complete", time.monotonic() - t0)
             if system_state:
                 system_state.add_sort_event(cls, 1.0, 0.0)
 
@@ -1620,116 +1515,77 @@ class SmartBinEngine:
             hw._smart_lock.stop_lock()
 
         try:
-            # Stage 0 — Move capture arm to photo position (120°)
-            # Using ServoEasing-style control with EASE_IN_OUT_CUBIC
+            # ============================================================
+            # USER REQUEST: New timing sequence
+            # ============================================================
+            
+            # Stage 0: Tilt servo1 to photo position, wait 2 seconds
+            logger.info("[t=%.3f] === Stage 0: Tilt to photo position ===", time.monotonic() - t0)
             hw.move_eased(Config.SERVO1_PIN, Config.PHOTO_ANGLE, SERVO_PROFILES["MG995"])
-            # Extra settle specifically for the capture arm (mechanical load may vary)
-            time.sleep(Config.PHOTO_SETTLE_DELAY)
-
-            # Flash ON, wait for light / exposure settle, then capture
+            logger.info("[t=%.3f] Waiting 2s for servo to settle...", time.monotonic() - t0)
+            time.sleep(2.0)  # USER REQUEST: wait 2 seconds
+            
+            # Stage 1: Flash ON, wait 1 second, capture, then OFF
+            logger.info("[t=%.3f] === Stage 1: Flash ON → wait 1s → Capture → Flash OFF ===", time.monotonic() - t0)
             self._send_flash(on=True)
-            time.sleep(Config.FLASH_SETTLE_DELAY)
+            logger.info("[t=%.3f] Flash ON, waiting 1s for light to stabilize...", time.monotonic() - t0)
+            time.sleep(1.0)  # USER REQUEST: wait 1 second for good lighting
+            
             frame = self._capture_http_frame()
             self._send_flash(on=False)
-
-            # Log commanded angle at capture moment (open-loop — no feedback)
-            servo1_cmd = hw._last_angle.get(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
-            logger.info("[t=%.3f] Capture frame at servo1_cmd=%.0f°", time.monotonic() - t0, servo1_cmd)
-
+            logger.info("[t=%.3f] Flash OFF, capture complete", time.monotonic() - t0)
+            
             if frame is None:
-                logger.warning("Failed capture — aborting pipeline")
+                logger.warning("[t=%.3f] Failed capture — aborting pipeline", time.monotonic() - t0)
                 return
-
-            # Inference
+            
+            # Stage 2: AI Inference (wait for result)
+            logger.info("[t=%.3f] === Stage 2: AI Inference ===", time.monotonic() - t0)
             start_ms = time.time() * 1000.0
             label, conf = classify_single_frame(frame)
             elapsed_ms = (time.time() * 1000.0) - start_ms
-
-            logger.info("[t=%.3f] Result: %s (conf=%.2f)",
-                        time.monotonic() - t0, label, conf)
+            logger.info("[t=%.3f] Result: %s (conf=%.2f, took %.0fms)",
+                        time.monotonic() - t0, label, conf, elapsed_ms)
             self._record_sort(label, conf, elapsed_ms)
-
-            # Stage 1: Reset Arm to Neutral
-            logger.info("[t=%.3f] === STAGE 1: Reset Arm to Neutral (home=%d°) ===", 
-                       time.monotonic() - t0, Config.CAP_HOME_ANGLE)
-            hw.move_eased(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, SERVO_PROFILES["MG995"])
-
-            # Stage 2: Rotate Bin (Servo 2)
+            
+            # Stage 3: Rotate bin (servo2) to target - wait until it arrives
             target_angle = self._label_to_angle(label)
+            current_servo2_pos = hw._last_angle.get(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
             
-            # CRITICAL FIX: Get actual position, don't assume home if unknown
-            current_servo2_pos = hw._last_angle.get(Config.SERVO2_PIN)
-            if current_servo2_pos is None:
-                logger.warning("[t=%.3f] Servo2 position unknown! Assuming at home %d°", 
-                              time.monotonic() - t0, Config.SORT_HOME_ANGLE)
-                current_servo2_pos = Config.SORT_HOME_ANGLE
-                # Force update tracking
-                hw._last_angle[Config.SERVO2_PIN] = current_servo2_pos
+            logger.info("[t=%.3f] === Stage 3: Rotate Bin (servo2 %d° → %d°) ===", 
+                       time.monotonic() - t0, current_servo2_pos, target_angle)
+            hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
+            logger.info("[t=%.3f] Servo2 arrived at bin", time.monotonic() - t0)
             
-            logger.info("[t=%.3f] === STAGE 2: Rotate Bin ===", time.monotonic() - t0)
-            logger.info("[t=%.3f] Label='%s' → target_angle=%d°", time.monotonic() - t0, label, target_angle)
-            logger.info("[t=%.3f] Servo2 current=%.1f°, target=%d°, distance=%.1f°",
-                       time.monotonic() - t0, current_servo2_pos, target_angle,
-                       abs(target_angle - current_servo2_pos))
-            
-            distance_servo2 = abs(target_angle - current_servo2_pos)
-            if distance_servo2 < 1.0:
-                logger.warning("[t=%.3f] Servo2 target ≈ current (dist=%.1f°). Still forcing move to ensure position.", 
-                              time.monotonic() - t0, distance_servo2)
-                # Force small move to ensure servo is at correct position
-                hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
-            else:
-                hw.move_eased(Config.SERVO2_PIN, target_angle, SERVO_PROFILES["DS5180SSG"])
-                logger.info("[t=%.3f] Servo2 movement complete", time.monotonic() - t0)
-
-            # Stage 3: Drop (Servo 1)
-            time.sleep(0.2)
+            # Stage 4: Drop (servo1 to sweep angle) - wait for drop to complete
+            logger.info("[t=%.3f] === Stage 4: Drop (servo1 to %d°) ===", 
+                       time.monotonic() - t0, Config.SWEEP_ANGLE)
             hw.move_eased(Config.SERVO1_PIN, Config.SWEEP_ANGLE, SERVO_PROFILES["MG995"])
-            # USER REQUEST: Wait 2 seconds after drop before returning home
-            time.sleep(2.0)
+            logger.info("[t=%.3f] Drop complete", time.monotonic() - t0)
+            
+            # Short wait for trash to fall
+            time.sleep(0.5)
 
         except Exception as exc:
-            logger.error("Detection pipeline crashed: %s", exc)
-        finally:
-            # USER REQUEST: Verified home return with 2-second timing and smart lock
-            # Phase 1: Return to home
-            hw.return_to_home_eased(verify=True)
+            logger.error("[t=%.3f] Detection pipeline crashed: %s", time.monotonic() - t0, exc)
             
-            # Phase 2: USER REQUEST - Wait 2 seconds at home before idling
-            # This ensures mechanical stability and prevents premature PWM cutoff
-            logger.info("[t=%.3f] At home, waiting 2 seconds for stability...", time.monotonic() - t0)
+        finally:
+            # ============================================================
+            # USER REQUEST: Return home, wait 2s, then cut signal (no lock)
+            # ============================================================
+            logger.info("[t=%.3f] === Finally: Return to Home ===", time.monotonic() - t0)
+            
+            # Return both servos to home
+            hw.return_to_home_eased(verify=False)  # No verify to save time
+            
+            # Wait 2 seconds at home for stability
+            logger.info("[t=%.3f] At home, waiting 2 seconds...", time.monotonic() - t0)
             time.sleep(2.0)
             
-            # Phase 3: Verify position after 2s wait
-            pos1 = hw._last_angle.get(Config.SERVO1_PIN)
-            pos2 = hw._last_angle.get(Config.SERVO2_PIN)
-            at_home1 = pos1 is not None and abs(pos1 - Config.CAP_HOME_ANGLE) < 2.0
-            at_home2 = pos2 is not None and abs(pos2 - Config.SORT_HOME_ANGLE) < 2.0
-            
-            if at_home1 and at_home2:
-                # USER REQUEST: Lock servo1 (MG995) at home to prevent tilt
-                # Analog servos can hold position safely without overheating
-                # Reference: https://www.rchelicopterfun.com/rc-servos.html
-                logger.info("[t=%.3f] Locking servo1 at home to prevent tray tilt", time.monotonic() - t0)
-                hw._smart_lock.start_lock(
-                    Config.SERVO1_PIN, 
-                    Config.CAP_HOME_ANGLE, 
-                    SERVO_PROFILES["MG995"]
-                )
-                
-                # Idle servo2 (DS5180SSG) - digital servo draws more power
-                # Smart lock will handle it with low-power mode after 3s
-                hw._smart_lock.start_lock(
-                    Config.SERVO2_PIN,
-                    Config.SORT_HOME_ANGLE,
-                    SERVO_PROFILES["DS5180SSG"]
-                )
-                
-                logger.info("[t=%.3f] Smart locks active - servo1 locked (analog, safe), servo2 low-power mode", 
-                           time.monotonic() - t0)
-            else:
-                logger.warning("[t=%.3f] Servos not at home after 2s wait! pos1=%s, pos2=%s", 
-                              time.monotonic() - t0, pos1, pos2)
+            # USER REQUEST: Cut signal immediately (no smart lock - causes jitter)
+            logger.info("[t=%.3f] Cutting servo signals (idle)", time.monotonic() - t0)
+            hw.idle_servos(force=False)
+            logger.info("[t=%.3f] === Pipeline Complete ===", time.monotonic() - t0)
 
     # ── helpers ───────────────────────────────────────────────────────
 
@@ -1818,7 +1674,7 @@ class SmartBinEngine:
 
 
 # =====================================================================
-# 11. ENTRY POINT
+# 14. ENTRY POINT
 # =====================================================================
 def main() -> None:
     """Launch SmartBin V2 engine from CLI."""
