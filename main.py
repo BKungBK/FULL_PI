@@ -1064,56 +1064,64 @@ class HardwareController:
             start = home_angle
             self._last_angle[pin] = start
         
-        target = float(target)
+        # CRITICAL FIX: Round target to integer to prevent servo jitter
+        target = int(round(float(target)))
+        start = int(round(float(start)))
         distance = abs(target - start)
         
-        if distance < 0.5:
+        # CRITICAL FIX: If distance < 1.0, snap directly to target
+        # This prevents micro-jitter from floating point decimals
+        if distance < 1:
             self.move_servo(pin, target)
             time.sleep(profile.settle_time)
-            self._last_angle[pin] = target
-            logger.debug("move_eased: small move, direct set pin=%d to %.1f°", pin, target)
+            self._last_angle[pin] = float(target)
+            logger.info("move_eased: snap move pin=%d → %d° (dist=%.1f°)", pin, target, distance)
             return
         
         # Calculate movement parameters
         # Time = distance / speed, with minimum for smooth acceleration
         duration = distance / profile.max_speed_dps
-        duration = max(0.2, duration)  # Min 200ms
+        duration = max(0.15, duration)  # Min 150ms for small moves
         
-        # Calculate number of steps (1 degree per step for smooth motion)
-        num_steps = int(distance)
-        num_steps = max(10, num_steps)  # Minimum 10 steps for smoothness
+        # CRITICAL FIX: Fixed step interval based on servo type
+        # MG995 (analog): needs fewer steps, slightly longer intervals
+        # DS5180SSG (digital): can handle more steps, shorter intervals
+        if profile.name == "MG995":
+            step_interval = 0.008  # 8ms per step for analog
+            num_steps = max(int(duration / step_interval), 5)
+        else:
+            step_interval = 0.005  # 5ms per step for digital
+            num_steps = max(int(duration / step_interval), 8)
         
-        step_time = duration / num_steps
         direction = 1 if target > start else -1
         
-        logger.info("move_eased: %s pin=%d %.1f°→%.1f° (dist=%.1f°, %d steps, %.3fs/step)",
-                    profile.name, pin, start, target, distance, num_steps, step_time)
+        logger.info("move_eased: %s pin=%d %d°→%d° (dist=%d°, %d steps, %.3fs/step)",
+                    profile.name, pin, start, target, distance, num_steps, step_interval)
         
         # Execute step-based movement with easing
+        last_angle_sent = start
         for step in range(num_steps + 1):
             # Calculate eased progress (0→1 with smooth curve)
             t_linear = step / num_steps
             t_eased = profile.easing(t_linear)
             
-            # Calculate angle for this step
-            angle = start + direction * distance * t_eased
+            # Calculate angle for this step - ROUND TO INTEGER
+            angle = int(round(start + direction * distance * t_eased))
             
-            # Send command
-            self.move_servo(pin, angle)
-            self._last_angle[pin] = float(angle)
+            # CRITICAL FIX: Only send if angle changed (prevent duplicate commands)
+            if angle != last_angle_sent or step == num_steps:
+                self.move_servo(pin, angle)
+                self._last_angle[pin] = float(angle)
+                last_angle_sent = angle
             
-            # Wait for next step (adaptive: slower at start/end, faster in middle)
+            # Fixed step interval - simpler and more reliable
             if step < num_steps:
-                # Adaptive timing: longer delays during acceleration/deceleration
-                # Easing derivative is steepest in middle (fastest motion)
-                # We want shorter delays when moving fast, longer when slow
-                speed_factor = 1.0 + 2.0 * abs(t_eased - t_linear)  # 1.0-3.0 range
-                adaptive_delay = step_time / speed_factor
-                time.sleep(max(0.001, adaptive_delay))
+                time.sleep(step_interval)
         
-        # Final position command
-        self.move_servo(pin, target)
-        self._last_angle[pin] = float(target)
+        # Final position command - ensure exact target
+        if last_angle_sent != target:
+            self.move_servo(pin, target)
+            self._last_angle[pin] = float(target)
         
         # Servo-specific settle time
         if profile.settle_time > 0:
