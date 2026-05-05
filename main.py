@@ -666,8 +666,8 @@ class HardwareController:
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
-        # Use force=True to ensure command is sent even if already at home
-        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, force=True)
+        # Only force Servo2; Servo1 uses normal move to prevent micro-jitter
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)      # NO force=True
         self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, force=True)
 
         # Stage 3 — hold PWM alive so horn settles under load
@@ -847,30 +847,32 @@ class HardwareController:
             else:
                 time.sleep(dt)
 
-        # Re-command target to ensure final position holds
-        self.move_servo(pin, target, force=True)
+        # Done — no force re-command to prevent micro-jitter
         time.sleep(Config.SERVO_SETTLE_TIME_S)
         logger.info("[SERVO1_SMOOTH] done at %.0f°", target)
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
         Only idles if near Home (92°) unless force=True to prevent dropping heavy loads.
-        Marks _last_angle as None so the next move knows position is unknown.
+        NEVER idles Servo1 (MG995) to prevent position loss and oscillation.
         """
         for pin in (Config.SERVO1_PIN, Config.SERVO2_PIN):
-            home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
+            # CRITICAL: Never idle Servo1 (pin 18) — it loses position and oscillates
+            if pin == Config.SERVO1_PIN:
+                logger.debug("idle_servos: SKIPPING Servo1 (pin %d) — keeping PWM alive", pin)
+                continue
+
+            home_angle = Config.SORT_HOME_ANGLE
             angle = self._last_angle.get(pin, home_angle)
             if angle is None:
                 angle = home_angle
-            # Safe to idle ONLY if at Home or Forced
-            if force or abs(angle - home_angle) < 2.0:
+
+            # Only idle Servo2 if close to home OR force=True
+            if force or abs(angle - home_angle) < 8.0:
                 try:
-                    lgpio.tx_servo(self._h, pin, 0)
-                except Exception:
-                    try:
-                        lgpio.tx_pwm(self._h, pin, 50, 0)
-                    except Exception as exc:
-                        logger.debug("idle_servos pin %d: %s", pin, exc)
+                    lgpio.tx_pwm(self._h, pin, 50, 0)
+                except Exception as exc:
+                    logger.debug("idle_servos pin %d: %s", pin, exc)
                 self._last_angle[pin] = None   # position now unknown
 
     # ── ultrasonic ────────────────────────────────────────────────────
@@ -1238,8 +1240,8 @@ class SmartBinEngine:
             home_angle = Config.CAP_HOME_ANGLE if name == "capture" else Config.SORT_HOME_ANGLE
             angle = int(cmd.get("angle", home_angle))
             if name == "capture":
-                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
-                hw.move_servo(Config.SERVO1_PIN, angle)
+                # Servo1 (MG995): use smooth_move_servo1 for stability
+                hw.smooth_move_servo1(angle)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
                 # Note: Not idling servo1 to prevent oscillation from rapid on/off
             elif name == "sort":
@@ -1248,8 +1250,8 @@ class SmartBinEngine:
                 hw.idle_servos(force=True)
             elif name == "all":
                 # Manual 'all' command (e.g. from Home button)
-                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
-                hw.move_servo(Config.SERVO1_PIN, angle)
+                # Servo1: smooth move; Servo2: smooth move
+                hw.smooth_move_servo1(angle)
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
                 # Only idle servo2, keep servo1 active to prevent oscillation
