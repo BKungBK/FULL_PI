@@ -1278,8 +1278,9 @@ class SmartBinEngine:
 
         Flow:
           Stage 0: Servo1 → 120° (photo), Flash ON 1.5s, Capture, Flash OFF
-          Stage 1: Servo2 → target bin (Servo1 stays at 120° holding bottle)
-          Stage 2: Servo1 → 45° (tip), wait for bottle to drop
+          Stage 1: Servo1 → HOME 99° (secure bottle upright)
+          Stage 2: Servo2 → target bin (rotate while bottle held at home)
+          Stage 3: Servo1 → 45° (tip into positioned bin), wait for drop
           Finally : Reset all servos home (safety)
         """
         t0 = time.monotonic()
@@ -1291,15 +1292,13 @@ class SmartBinEngine:
             # STAGE 0: PHOTO — Servo1 tilts to 120° holding the bottle
             # ═════════════════════════════════════════════════════════════
             logger.info("[PIPELINE] Stage 0: Servo1 → PHOTO %.0f° (holding bottle)", Config.PHOTO_ANGLE)
-            # hold_ms keeps PWM alive while holding bottle weight
             hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE, hold_ms=500)
-            # Wait for servo to fully stabilize (mechanical damping)
             time.sleep(Config.PHOTO_SETTLE_DELAY)
 
             # Flash ON → wait 1.5s → capture → Flash OFF
             logger.info("[PIPELINE] Stage 0: Flash ON (%.1fs)", Config.FLASH_SETTLE_DELAY)
             self._send_flash(on=True)
-            time.sleep(Config.FLASH_SETTLE_DELAY)   # Flash duration (default 1.5s)
+            time.sleep(Config.FLASH_SETTLE_DELAY)
             frame = self._capture_http_frame()
             self._send_flash(on=False)
             logger.info("[PIPELINE] Stage 0: Flash OFF, captured")
@@ -1308,7 +1307,6 @@ class SmartBinEngine:
                 logger.warning("Failed capture — aborting pipeline")
                 return
 
-            # Log capture moment
             servo1_cmd = hw._last_angle.get(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
             logger.info("[t=%.3f] Capture frame at servo1_cmd=%.0f°", time.monotonic() - t0, servo1_cmd)
 
@@ -1322,33 +1320,37 @@ class SmartBinEngine:
             self._record_sort(label, conf, elapsed_ms)
 
             # ═════════════════════════════════════════════════════════════
-            # STAGE 1: ROTATE BIN — Servo2 → target angle
-            #   CRITICAL: Servo1 stays at 120° (DO NOT move — bottle still held!)
+            # STAGE 1: SERVO1 → HOME (secure bottle upright before bin rotates)
+            #   Bottle is safest at home (99° is more upright than 120°)
+            # ═════════════════════════════════════════════════════════════
+            logger.info("[PIPELINE] Stage 1: Servo1 → HOME %.0f° (secure bottle)", Config.CAP_HOME_ANGLE)
+            hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
+            time.sleep(0.8)   # Wait for Servo1 to fully settle at home
+
+            # ═════════════════════════════════════════════════════════════
+            # STAGE 2: ROTATE BIN — Servo2 → target angle
+            #   Bottle is held safely at home while bin rotates underneath
             # ═════════════════════════════════════════════════════════════
             target_angle = self._label_to_angle(label)
-            logger.info("[PIPELINE] Stage 1: Servo2 → %s (%.0f°), Servo1 stays at %.0f°",
-                        label, target_angle, Config.PHOTO_ANGLE)
+            logger.info("[PIPELINE] Stage 2: Servo2 → %s (%.0f°), bottle held at HOME",
+                        label, target_angle)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
-            # Wait for bin to physically reach position before tipping
             time.sleep(Config.BIN_ROTATE_WAIT_S)
 
             # ═════════════════════════════════════════════════════════════
-            # STAGE 2: TIP — Servo1 → 45° (dump bottle into selected bin)
+            # STAGE 3: TIP — Servo1 → 45° (dump bottle into positioned bin)
             # ═════════════════════════════════════════════════════════════
-            logger.info("[PIPELINE] Stage 2: Servo1 → TIP %.0f° (bin at %.0f°)",
+            logger.info("[PIPELINE] Stage 3: Servo1 → TIP %.0f° (bin at %.0f°)",
                         Config.SWEEP_ANGLE, target_angle)
-            # hold_ms=800: re-send PWM during heavy load (bottle sliding out)
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=800)
-            # Wait for bottle to slide and fully drop
             time.sleep(Config.TIP_HOLD_TIME_S)
 
             # Re-command to catch any gravity sag during load
-            logger.info("[PIPELINE] Stage 2: Re-command tip (sag compensation)")
+            logger.info("[PIPELINE] Stage 3: Re-command tip (sag compensation)")
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, force=True)
             time.sleep(0.3)
 
-            # By this point bottle should have dropped. Safe to return home.
-            logger.info("[PIPELINE] Stage 2: Bottle dropped — proceeding to reset")
+            logger.info("[PIPELINE] Stage 3: Bottle dropped — proceeding to reset")
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
