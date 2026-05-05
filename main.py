@@ -604,11 +604,13 @@ class HardwareController:
         if not force:
             current = self._last_angle.get(pin)
             if current is not None and abs(current - angle) < 1.0:
+                logger.debug("move_servo pin=%d SKIP: already at %.1f°", pin, current)
                 return  # Already at target, skip
         
         pulse_us = int(500 + (angle / 180.0) * 2000)
         lgpio.tx_servo(self._h, pin, pulse_us)
         self._last_angle[pin] = angle
+        logger.info("[SERVO] pin=%d → %.1f° (pulse=%dus)", pin, angle, pulse_us)
         
         # Hold torque: re-send PWM repeatedly during heavy load
         if hold_ms > 0:
@@ -651,8 +653,10 @@ class HardwareController:
         """
         # Stage 1 — Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
         # Stage 1 — Servo2: smooth move
+        logger.info("[RETURN_HOME] Servo1 → HOME %.0f°", Config.CAP_HOME_ANGLE)
         self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        time.sleep(0.6)  # Wait for Servo1 to stabilize
+        time.sleep(0.6)
+        logger.info("[RETURN_HOME] Servo2 → HOME %.0f° (passing through bins)", Config.SORT_HOME_ANGLE)
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
@@ -1284,24 +1288,26 @@ class SmartBinEngine:
             self._record_sort(label, conf, elapsed_ms)
 
             # Stage 1: Reset Arm to Neutral (Servo1: direct move)
+            logger.info("[PIPELINE] Stage 1: Reset Servo1 to HOME %.0f°", Config.CAP_HOME_ANGLE)
             hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-            time.sleep(0.6)  # Wait for servo to fully stabilize
+            time.sleep(0.6)
 
             # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
+            logger.info("[PIPELINE] Stage 2: Rotate Servo2 → %s (%.0f°)", label, target_angle)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
-            time.sleep(0.6)  # Wait for bin rotation to complete
+            time.sleep(0.6)
+            logger.info("[PIPELINE] Stage 2: Bin should be at %.0f°", target_angle)
 
-            # Stage 3: Drop (Servo 1) — direct move with jiggle to help bottle fall
-            time.sleep(0.2)  # Gap after bin rotation
-            # Move to tip position with hold torque (re-send PWM during load)
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=600)
-            time.sleep(0.6)  # Wait for bottle to start sliding
-            # Jiggle: small oscillation to help bottle fall
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE + 5)  # 50°
+            # Stage 3: Drop (Servo 1)
             time.sleep(0.2)
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)    # Back to 45°
-            time.sleep(0.8)  # Wait for bottle to fully drop
+            logger.info("[PIPELINE] Stage 3: TIPPING Servo1 → %.0f° (bin at %.0f°)", 
+                        Config.SWEEP_ANGLE, target_angle)
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=600)
+            time.sleep(1.2)
+            logger.info("[PIPELINE] Stage 3: TIP HOLD done — checking if bottle dropped")
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, force=True)
+            time.sleep(0.5)
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
