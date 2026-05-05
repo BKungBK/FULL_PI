@@ -6,13 +6,19 @@ Automated waste sorting:
   Stage-2  TFLite INT8 → classify waste type
   Hardware GPIO servos  → sort into correct bin
 
-Detection timing (from hand-withdrawal):
-  t=0.00s  Hand withdrawn   → Servo1 pre-emptive → 120°
-  t=0.50s  Grab 5 frames    → rolling frame buffer
-  t~0.55s  Inference done   → label determined (5-frame vote)
-  t~0.65s  Sort servo       → Servo2 → target bin angle
-  t=1.00s  Drop             → Servo1 → 45°
-  t=1.50s  Reset            → all servos home
+Pipeline flow (from hand-withdrawal):
+  1. Servo1 (MG995) → PHOTO_ANGLE (120°)  [smooth move]
+  2. Flash ON → wait 1.5s → capture → Flash OFF
+  3. Inference → get waste label
+  4. Servo2 → target bin angle            [smooth move]
+  5. Servo1 → SWEEP_ANGLE (45°)            [tip / drop]
+  6. Reset → all servos home
+
+Servo1 control: smooth_move_servo1()
+  - Linear easing (predictable, no gravity surprises)
+  - No pre-tension (prevents initial tilt-down)
+  - 1-degree quantization (above MG995 dead band)
+  - Slower speed 20°/s (stability over speed)
 
 Usage:
     python main.py
@@ -145,7 +151,7 @@ class Config:
     SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
     HOME_VERIFY_DELAY_S: float = 0.40        # extra hold after re-command home (prevents sag)
     PHOTO_SETTLE_DELAY: float = 1.0          # wait after servo reaches PHOTO_ANGLE (increased for stability)
-    FLASH_SETTLE_DELAY: float = 0.3          # wait after flash ON before capture (increased for exposure)
+    FLASH_SETTLE_DELAY: float = 1.5          # wait after flash ON before capture (1.5s for stable lighting)
     HOME_ALL_DELAY_S: float = 0.80           # worst-case full-sweep homing at startup
 
     # ── Reject bin servo angle ───────────────────────────────────────
@@ -779,6 +785,73 @@ class HardwareController:
             pin, target, start, time.monotonic() - start_time
         )
 
+    def smooth_move_servo1(self, target: float, speed: float = 20.0) -> None:
+        """Smooth move specifically for MG995 Servo1 (pin 18).
+
+        Differences from generic smooth_move:
+        - Linear easing (no S-curve) → predictable, no gravity surprises
+        - NO pre-tension → prevents initial tilt-down
+        - 1-degree quantization (not 0.5) → above MG995 dead band, less jitter
+        - Slower default speed (20°/s vs 30°/s) → stability over speed
+        - hold_ms during movement → maintains torque under load
+        """
+        pin = Config.SERVO1_PIN
+        start = self._last_angle.get(pin)
+
+        if start is None:
+            # Unknown position — safe home first
+            self.warmup_servo(pin)
+            self.move_servo(pin, Config.CAP_HOME_ANGLE, sync=True)
+            time.sleep(Config.HOME_ALL_DELAY_S)
+            start = float(Config.CAP_HOME_ANGLE)
+            self._last_angle[pin] = start
+
+        target = float(round(target))
+        distance = abs(target - start)
+
+        if distance < 1.0:
+            self.move_servo(pin, target, sync=True)
+            time.sleep(Config.SERVO_SETTLE_TIME_S)
+            return
+
+        duration = distance / speed
+        duration = max(0.3, duration)  # minimum 0.3s for stability
+
+        dt = 1.0 / Config.SERVO_UPDATE_HZ  # 20 ms
+        start_time = time.monotonic()
+        last_sent_angle = None
+        direction = 1.0 if target > start else -1.0
+
+        logger.info("[SERVO1_SMOOTH] start=%.0f° → target=%.0f° (%.1f° in %.2fs)",
+                    start, target, distance, duration)
+
+        while True:
+            elapsed = time.monotonic() - start_time
+            t = min(1.0, elapsed / duration)
+
+            if t >= 1.0:
+                if last_sent_angle != target:
+                    self.move_servo(pin, target, sync=True)
+                break
+
+            # Linear easing: simple and predictable
+            current = start + (target - start) * t
+
+            # 1-degree quantization (above MG995 dead band)
+            quantized_angle = round(current)
+
+            # Only send if changed
+            if quantized_angle != last_sent_angle:
+                self.move_servo(pin, quantized_angle, sync=True)
+                last_sent_angle = quantized_angle
+            else:
+                time.sleep(dt)
+
+        # Re-command target to ensure final position holds
+        self.move_servo(pin, target, force=True)
+        time.sleep(Config.SERVO_SETTLE_TIME_S)
+        logger.info("[SERVO1_SMOOTH] done at %.0f°", target)
+
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
         Only idles if near Home (92°) unless force=True to prevent dropping heavy loads.
@@ -1259,16 +1332,20 @@ class SmartBinEngine:
         assert hw
 
         try:
-            # Stage 0 — Move capture arm to photo position (120°)
-            # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
-            hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
-            time.sleep(Config.PHOTO_SETTLE_DELAY)  # Configurable servo settle time
+            # === STAGE 0: Photo Capture ===
+            # Servo1 (MG995): smooth move to photo position (120°)
+            logger.info("[FLOW] Stage 0: Servo1 → PHOTO_ANGLE %.0f°", Config.PHOTO_ANGLE)
+            hw.smooth_move_servo1(Config.PHOTO_ANGLE)
+            logger.info("[FLOW] Stage 0: Servo1 at photo position, settling...")
+            time.sleep(Config.PHOTO_SETTLE_DELAY)  # wait for mechanical stability
 
-            # Flash ON, wait for light / exposure settle, then capture
+            # Flash ON, wait 1.5s for stable lighting, then capture
+            logger.info("[FLOW] Stage 0: Flash ON, waiting %.1fs", Config.FLASH_SETTLE_DELAY)
             self._send_flash(on=True)
-            time.sleep(Config.FLASH_SETTLE_DELAY)  # Configurable flash settle time
+            time.sleep(Config.FLASH_SETTLE_DELAY)
             frame = self._capture_http_frame()
             self._send_flash(on=False)
+            logger.info("[FLOW] Stage 0: Photo captured, flash OFF")
 
             # Log commanded angle at capture moment (open-loop — no feedback)
             servo1_cmd = hw._last_angle.get(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
@@ -1287,26 +1364,24 @@ class SmartBinEngine:
                         time.monotonic() - t0, label, conf)
             self._record_sort(label, conf, elapsed_ms)
 
-            # Stage 1: Reset Arm to Neutral (Servo1: direct move)
-            logger.info("[PIPELINE] Stage 1: Reset Servo1 to HOME %.0f°", Config.CAP_HOME_ANGLE)
-            hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-            time.sleep(0.6)
+            # === STAGE 1: Reset Servo1 to Home (prepare for drop) ===
+            logger.info("[FLOW] Stage 1: Servo1 → HOME %.0f°", Config.CAP_HOME_ANGLE)
+            hw.smooth_move_servo1(Config.CAP_HOME_ANGLE)
+            time.sleep(0.5)
 
-            # Stage 2: Rotate Bin (Servo 2)
+            # === STAGE 2: Rotate Bin to target ===
             target_angle = self._label_to_angle(label)
-            logger.info("[PIPELINE] Stage 2: Rotate Servo2 → %s (%.0f°)", label, target_angle)
+            logger.info("[FLOW] Stage 2: Servo2 → %s (%.0f°)", label, target_angle)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
             time.sleep(0.6)
-            logger.info("[PIPELINE] Stage 2: Bin should be at %.0f°", target_angle)
+            logger.info("[FLOW] Stage 2: Bin ready at %.0f°", target_angle)
 
-            # Stage 3: Drop (Servo 1)
+            # === STAGE 3: Drop bottle ===
             time.sleep(0.2)
-            logger.info("[PIPELINE] Stage 3: TIPPING Servo1 → %.0f° (bin at %.0f°)", 
-                        Config.SWEEP_ANGLE, target_angle)
+            logger.info("[FLOW] Stage 3: Servo1 → SWEEP %.0f° (tipping)", Config.SWEEP_ANGLE)
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=600)
             time.sleep(1.2)
-            logger.info("[PIPELINE] Stage 3: TIP HOLD done — checking if bottle dropped")
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, force=True)
+            logger.info("[FLOW] Stage 3: Drop complete — bottle should have fallen")
             time.sleep(0.5)
 
         except Exception as exc:
