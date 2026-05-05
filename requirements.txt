@@ -1,0 +1,30 @@
+# SmartBin V2 - Python Requirements
+# Raspberry Pi 5 | Python 3.10+
+# Install: pip install -r requirements.txt
+
+# ── Computer Vision ──────────────────────────────────────────────
+opencv-python-headless>=4.8.0
+
+# CRITICAL: tflite-runtime was compiled with NumPy 1.x C API.
+# NumPy 2.x removed numpy.core -> ImportError on tflite load.
+# Must stay below 2.0.
+numpy<2
+
+# ── AI / Inference ───────────────────────────────────────────────
+ncnn
+tflite-runtime>=2.13.0
+
+# ── Hardware (Raspberry Pi 5 only) ───────────────────────────────
+lgpio>=0.2.2
+requests>=2.31.0
+
+# ── Desktop UI ───────────────────────────────────────────────────
+customtkinter>=5.2.0
+Pillow>=10.0.0
+matplotlib>=3.7.0
+
+# ── Web API Server ────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+httpx>=0.27.0
+pydantic>=2.0.0

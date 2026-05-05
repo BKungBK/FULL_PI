@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "skills": {
+    "dataverse-python-advanced-patterns": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "computedHash": "dd4f65b62c3b702c7dfc14a4e19caaa9ab3515e87a1d7e110482d9ba19469bd0"
+    },
+    "dataverse-python-production-code": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "computedHash": "7299422fdb42dcede45a761921656a6450c476388731288a6e5afb0303f1d25d"
+    },
+    "dataverse-python-quickstart": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "computedHash": "624493386b6fec1df180fcf5393a408c50f9aeb971580a2fff4dbab21118d682"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "computedHash": "516bd2154eb843a8240e43d5b285229129853114ad7075a5e141e1c08e408c84"
+    }
+  }
+}
