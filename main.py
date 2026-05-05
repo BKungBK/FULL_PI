@@ -144,8 +144,10 @@ class Config:
     SERVO_SETTLE_TIME_S: float = 0.20        # post-move mechanical damping
     SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
     HOME_VERIFY_DELAY_S: float = 0.40        # extra hold after re-command home (prevents sag)
-    PHOTO_SETTLE_DELAY: float = 0.5          # wait after servo reaches PHOTO_ANGLE (smooth already settles 0.2s)
-    FLASH_SETTLE_DELAY: float = 1.5          # flash ON duration before capture (user requested 1.5s)
+    PHOTO_SETTLE_DELAY: float = 1.0          # wait after servo reaches PHOTO_ANGLE
+    FLASH_SETTLE_DELAY: float = 1.5          # Flash ON duration before capture
+    TIP_HOLD_TIME_S: float = 1.5             # hold tip position for bottle to drop
+    BIN_ROTATE_WAIT_S: float = 0.8            # wait after bin rotation before tipping
     HOME_ALL_DELAY_S: float = 0.80           # worst-case full-sweep homing at startup
 
     # ── Reject bin servo angle ───────────────────────────────────────
@@ -651,11 +653,12 @@ class HardwareController:
         any sag that occurs while the other servo is still moving.  Only
         then do we sleep HOME_VERIFY_DELAY_S before returning.
         """
-        # Stage 1 — Servo1: smooth move back to home
-        # Stage 1 — Servo2: smooth move back to home
-        logger.info("[RETURN_HOME] Servo1 smooth → HOME %.0f°", Config.CAP_HOME_ANGLE)
-        self.smooth_move_servo1(Config.CAP_HOME_ANGLE, speed=50.0)
-        logger.info("[RETURN_HOME] Servo2 smooth → HOME %.0f°", Config.SORT_HOME_ANGLE)
+        # Stage 1 — Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+        # Stage 1 — Servo2: smooth move
+        logger.info("[RETURN_HOME] Servo1 → HOME %.0f°", Config.CAP_HOME_ANGLE)
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
+        time.sleep(0.6)
+        logger.info("[RETURN_HOME] Servo2 → HOME %.0f° (passing through bins)", Config.SORT_HOME_ANGLE)
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
@@ -777,38 +780,6 @@ class HardwareController:
             "Servo pin=%d target=%.0f° start=%.0f° duration=%.2fs",
             pin, target, start, time.monotonic() - start_time
         )
-
-    def smooth_move_servo1(self, target: float, speed: float = 50.0) -> None:
-        """Simple linear smooth move for Servo1 (MG995) — no pre-tension, no S-curve.
-
-        Uses 1-degree steps with PWM sync to minimize jitter.
-        Linear interpolation prevents unpredictable motion profiles.
-        No pre-tension to avoid initial tilt-down issues.
-        """
-        start = self._last_angle.get(Config.SERVO1_PIN)
-        if start is None:
-            start = Config.CAP_HOME_ANGLE
-            self.move_servo(Config.SERVO1_PIN, start, sync=True)
-            time.sleep(0.5)
-
-        target = float(round(target))
-        distance = target - start
-        if abs(distance) < 1.0:
-            self.move_servo(Config.SERVO1_PIN, target, sync=True)
-            time.sleep(0.2)
-            return
-
-        # Linear speed control: MG995 ~60°/s at 6V, use 50°/s for safety
-        duration = abs(distance) / speed
-        duration = max(0.2, duration)
-
-        steps = max(int(abs(distance)), 1)  # 1 degree per step
-        for i in range(1, steps + 1):
-            angle = start + (distance * i / steps)
-            quantized = round(angle)
-            self.move_servo(Config.SERVO1_PIN, quantized, sync=True)
-
-        time.sleep(Config.SERVO_SETTLE_TIME_S)
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
@@ -1004,6 +975,11 @@ class SmartBinEngine:
             Config.COOLDOWN_SECONDS = float(dt.get("cooldown", Config.COOLDOWN_SECONDS))
             Config.MIN_CONFIDENCE_THRESHOLD = float(dt.get("min_conf", Config.MIN_CONFIDENCE_THRESHOLD))
             Config.UNCERTAINTY_REJECT_THRESHOLD = float(dt.get("uncertainty_reject", Config.UNCERTAINTY_REJECT_THRESHOLD))
+            # Timing
+            Config.PHOTO_SETTLE_DELAY = float(dt.get("photo_settle", Config.PHOTO_SETTLE_DELAY))
+            Config.FLASH_SETTLE_DELAY = float(dt.get("flash_settle", Config.FLASH_SETTLE_DELAY))
+            Config.TIP_HOLD_TIME_S = float(dt.get("tip_hold", Config.TIP_HOLD_TIME_S))
+            Config.BIN_ROTATE_WAIT_S = float(dt.get("bin_rotate_wait", Config.BIN_ROTATE_WAIT_S))
             logger.info("Loaded smartbin_config.json")
         except Exception as e:
             logger.error("Failed to load config: %s", e)
@@ -1035,6 +1011,10 @@ class SmartBinEngine:
                         "cooldown": Config.COOLDOWN_SECONDS,
                         "min_conf": Config.MIN_CONFIDENCE_THRESHOLD,
                         "uncertainty_reject": Config.UNCERTAINTY_REJECT_THRESHOLD,
+                        "photo_settle": Config.PHOTO_SETTLE_DELAY,
+                        "flash_settle": Config.FLASH_SETTLE_DELAY,
+                        "tip_hold": Config.TIP_HOLD_TIME_S,
+                        "bin_rotate_wait": Config.BIN_ROTATE_WAIT_S,
                     },
                 }, f, indent=2)
             logger.info("Saved smartbin_config.json")
@@ -1237,6 +1217,8 @@ class SmartBinEngine:
             if "servo_settle"       in cmd: Config.SERVO_SETTLE_TIME_S            = float(cmd["servo_settle"])
             if "servo_hold"         in cmd: Config.SERVO_HOLD_TIME_S                = float(cmd["servo_hold"])
             if "home_verify"        in cmd: Config.HOME_VERIFY_DELAY_S               = float(cmd["home_verify"])
+            if "tip_hold"           in cmd: Config.TIP_HOLD_TIME_S                 = float(cmd["tip_hold"])
+            if "bin_rotate_wait"    in cmd: Config.BIN_ROTATE_WAIT_S               = float(cmd["bin_rotate_wait"])
             # Servo angles
             if "cap_home"  in cmd: Config.CAP_HOME_ANGLE  = int(cmd["cap_home"])
             if "sort_home" in cmd: Config.SORT_HOME_ANGLE = int(cmd["sort_home"])
@@ -1284,61 +1266,95 @@ class SmartBinEngine:
         return None
 
     def _process_detection(self) -> None:
-        """Execute the full detection pipeline with guaranteed Reset."""
+        """Full detection pipeline: Photo → Classify → Rotate Bin → Tip → Reset.
+
+        MG995 Servo1 (pin 18) Control Strategy:
+          1. DIRECT PWM ONLY — Never use smooth_move on Servo1 (causes jitter)
+          2. PWM HOLD — Use hold_ms when under load (holding bottle at 120° / 45°)
+          3. NO IDLE — Never idle Servo1 between stages (PWM off = lose torque)
+          4. SKIP DEDUP — move_servo skips if |current - target| < 1°
+          5. FORCE TRUE — Only for intentional re-commands (sag compensation)
+          6. POWER — Dedicated 6V 2A+ supply, common ground with Pi, max 7.2V
+
+        Flow:
+          Stage 0: Servo1 → 120° (photo), Flash ON 1.5s, Capture, Flash OFF
+          Stage 1: Servo2 → target bin (Servo1 stays at 120° holding bottle)
+          Stage 2: Servo1 → 45° (tip), wait for bottle to drop
+          Finally : Reset all servos home (safety)
+        """
         t0 = time.monotonic()
         hw = self._hw
         assert hw
 
         try:
-            # Stage 0 — Servo1 smooth → PHOTO_ANGLE (120°)
-            # Linear smooth with 1° steps, no pre-tension, PWM sync
-            logger.info("[PIPELINE] Stage 0: Servo1 smooth → %.0f°", Config.PHOTO_ANGLE)
-            hw.smooth_move_servo1(Config.PHOTO_ANGLE, speed=50.0)
+            # ═════════════════════════════════════════════════════════════
+            # STAGE 0: PHOTO — Servo1 tilts to 120° holding the bottle
+            # ═════════════════════════════════════════════════════════════
+            logger.info("[PIPELINE] Stage 0: Servo1 → PHOTO %.0f° (holding bottle)", Config.PHOTO_ANGLE)
+            # hold_ms keeps PWM alive while holding bottle weight
+            hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE, hold_ms=500)
+            # Wait for servo to fully stabilize (mechanical damping)
             time.sleep(Config.PHOTO_SETTLE_DELAY)
 
-            # Flash ON, hold for FLASH_SETTLE_DELAY (1.5s), then capture
-            logger.info("[PIPELINE] Flash ON (%.1fs)", Config.FLASH_SETTLE_DELAY)
+            # Flash ON → wait 1.5s → capture → Flash OFF
+            logger.info("[PIPELINE] Stage 0: Flash ON (%.1fs)", Config.FLASH_SETTLE_DELAY)
             self._send_flash(on=True)
-            time.sleep(Config.FLASH_SETTLE_DELAY)
+            time.sleep(Config.FLASH_SETTLE_DELAY)   # Flash duration (default 1.5s)
             frame = self._capture_http_frame()
             self._send_flash(on=False)
-            logger.info("[PIPELINE] Flash OFF, capture done")
+            logger.info("[PIPELINE] Stage 0: Flash OFF, captured")
 
             if frame is None:
                 logger.warning("Failed capture — aborting pipeline")
                 return
 
-            # Inference
+            # Log capture moment
+            servo1_cmd = hw._last_angle.get(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
+            logger.info("[t=%.3f] Capture frame at servo1_cmd=%.0f°", time.monotonic() - t0, servo1_cmd)
+
+            # ═════════════════════════════════════════════════════════════
+            # INFERENCE — Classify waste type
+            # ═════════════════════════════════════════════════════════════
             start_ms = time.time() * 1000.0
             label, conf = classify_single_frame(frame)
             elapsed_ms = (time.time() * 1000.0) - start_ms
-            logger.info("[t=%.3f] Result: %s (conf=%.2f)",
-                        time.monotonic() - t0, label, conf)
+            logger.info("[t=%.3f] Result: %s (conf=%.2f)", time.monotonic() - t0, label, conf)
             self._record_sort(label, conf, elapsed_ms)
 
-            # Stage 1: Rotate Bin (Servo2) — Servo1 stays at PHOTO_ANGLE (120°)
-            # NO unnecessary reset of Servo1 to home before bin rotation
+            # ═════════════════════════════════════════════════════════════
+            # STAGE 1: ROTATE BIN — Servo2 → target angle
+            #   CRITICAL: Servo1 stays at 120° (DO NOT move — bottle still held!)
+            # ═════════════════════════════════════════════════════════════
             target_angle = self._label_to_angle(label)
-            logger.info("[PIPELINE] Stage 1: Servo2 smooth → %s (%.0f°)", label, target_angle)
+            logger.info("[PIPELINE] Stage 1: Servo2 → %s (%.0f°), Servo1 stays at %.0f°",
+                        label, target_angle, Config.PHOTO_ANGLE)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
+            # Wait for bin to physically reach position before tipping
+            time.sleep(Config.BIN_ROTATE_WAIT_S)
+
+            # ═════════════════════════════════════════════════════════════
+            # STAGE 2: TIP — Servo1 → 45° (dump bottle into selected bin)
+            # ═════════════════════════════════════════════════════════════
+            logger.info("[PIPELINE] Stage 2: Servo1 → TIP %.0f° (bin at %.0f°)",
+                        Config.SWEEP_ANGLE, target_angle)
+            # hold_ms=800: re-send PWM during heavy load (bottle sliding out)
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=800)
+            # Wait for bottle to slide and fully drop
+            time.sleep(Config.TIP_HOLD_TIME_S)
+
+            # Re-command to catch any gravity sag during load
+            logger.info("[PIPELINE] Stage 2: Re-command tip (sag compensation)")
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, force=True)
             time.sleep(0.3)
-            logger.info("[PIPELINE] Stage 1: Bin at %.0f°", target_angle)
 
-            # Stage 2: Drop — Servo1 smooth → SWEEP_ANGLE (45°)
-            # Smooth motion from 120° → 45° to avoid bottle ejection
-            logger.info("[PIPELINE] Stage 2: Servo1 smooth → %.0f° (drop)", Config.SWEEP_ANGLE)
-            hw.smooth_move_servo1(Config.SWEEP_ANGLE, speed=50.0)
-
-            # Hold at drop position for bottle to fully fall
-            logger.info("[PIPELINE] Stage 2: Holding drop position 1.0s")
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=1000)
-            time.sleep(1.0)
+            # By this point bottle should have dropped. Safe to return home.
+            logger.info("[PIPELINE] Stage 2: Bottle dropped — proceeding to reset")
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
         finally:
-            # CRITICAL: Always return both servos to Home / Center
-            logger.info("[PIPELINE] Stage 3: Reset all servos home")
+            # CRITICAL SAFETY: Always return both servos to home / center
+            # This runs even if pipeline crashed mid-way
             hw.return_to_home()
             hw.idle_servos(force=True)
             logger.info("[t=%.3f] Pipeline finished & Reset", time.monotonic() - t0)
