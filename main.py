@@ -586,12 +586,20 @@ class HardwareController:
 
     # ── servo ─────────────────────────────────────────────────────────
 
-    def move_servo(self, pin: int, angle: float) -> None:
-        """Set servo to *angle* degrees (clamped 0–180)."""
+    def move_servo(self, pin: int, angle: float, sync: bool = False) -> None:
+        """Set servo to *angle* degrees (clamped 0–180).
+
+        Args:
+            pin: GPIO pin number
+            angle: Target angle in degrees (0-180)
+            sync: If True, wait for PWM period to complete before returning
+        """
         angle = max(0.0, min(180.0, angle))
         pulse_us = int(500 + (angle / 180.0) * 2000)
         lgpio.tx_servo(self._h, pin, pulse_us)
         self._last_angle[pin] = angle
+        if sync:
+            time.sleep(0.021)  # รอ 1 PWM period (20ms) + 1ms safety margin
 
     def warmup_servo(self, pin: int) -> None:
         """Ensure PWM wave is active. Call after idle or before first move."""
@@ -642,12 +650,18 @@ class HardwareController:
         pin: int,
         target: float,
         speed: float = 30.0,
+        pre_tension: bool = True,
     ) -> None:
-        """Interpolate servo using a Delta-Time loop and Quartic Easing.
+        """Interpolate servo using S-Curve Easing with anti-jitter and backlash compensation.
 
-        Updates at 50 Hz (matches PWM period) with 1-degree quantisation
-        to eliminate micro-jitter. After reaching target we sleep
-        SERVO_SETTLE_TIME_S so the horn mechanically damps out.
+        Features:
+        - S-Curve easing (quadratic): faster start than quartic to counter gravity
+        - Pre-tension: micro-move to take up gear backlash before main motion
+        - 0.5-degree quantization: finer control than 1-degree
+        - PWM sync: wait for period completion to prevent pulse overlap
+        - Delta-time loop at 50 Hz matching servo PWM period
+
+        After reaching target, sleeps SERVO_SETTLE_TIME_S for mechanical damping.
         """
         home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
         start = self._last_angle.get(pin)
@@ -655,7 +669,7 @@ class HardwareController:
         if start is None:
             # Unknown position — force a slow home first, then proceed
             self.warmup_servo(pin)
-            self.move_servo(pin, home_angle)
+            self.move_servo(pin, home_angle, sync=True)
             time.sleep(Config.HOME_ALL_DELAY_S)
             start = home_angle
             self._last_angle[pin] = start
@@ -663,8 +677,8 @@ class HardwareController:
         target = float(round(target))
         distance = abs(target - start)
 
-        if distance < 1.0:
-            self.move_servo(pin, target)
+        if distance < 0.5:
+            self.move_servo(pin, target, sync=True)
             time.sleep(Config.SERVO_SETTLE_TIME_S)
             return
 
@@ -674,30 +688,63 @@ class HardwareController:
         dt = 1.0 / Config.SERVO_UPDATE_HZ   # 20 ms
         start_time = time.monotonic()
 
+        # Pre-tension: Quick micro-move to take up backlash in metal gears
+        # This prevents gravity from causing tilt-down during slow easing start
+        if pre_tension and distance > 3.0:
+            direction = 1.0 if target > start else -1.0
+            # Move 3 degrees or 10% of total distance, whichever is smaller
+            tension_amount = min(3.0, distance * 0.1)
+            tension_target = start + direction * tension_amount
+            self.move_servo(pin, tension_target, sync=True)
+            # MG995: 0.16s/60deg at 6V, so 3deg needs ~8ms, use 80ms for loaded arm
+            time.sleep(0.08)
+            start = tension_target
+            self._last_angle[pin] = start
+
+        last_sent_angle = None
+
         while True:
             elapsed = time.monotonic() - start_time
             t = min(1.0, elapsed / duration)
 
             if t >= 1.0:
-                self.move_servo(pin, target)
+                if last_sent_angle != target:
+                    self.move_servo(pin, target, sync=True)
                 break
 
+            # S-Curve (Quadratic) easing: faster initial response than Quartic
+            # Ease-in (first half): parabolic acceleration from zero
+            # Ease-out (second half): parabolic deceleration to zero
             if t < 0.5:
-                eased_t = 8.0 * (t ** 4)
+                # S-curve ease-in: 0.5 * (2t)^2 = 2t^2
+                # At t=0.1: eased=0.02 (2%), vs Quartic=0.0008 (0.08%)
+                # This provides enough initial velocity to counter gravity
+                eased_t = 0.5 * (2.0 * t) ** 2
             else:
-                p = (-2.0 * t) + 2.0
-                eased_t = 1.0 - ((p ** 4) / 2.0)
+                # S-curve ease-out: 1 - 0.5*(2-2t)^2
+                p = 2.0 * (1.0 - t)
+                eased_t = 1.0 - 0.5 * p ** 2
 
             current = start + (target - start) * eased_t
 
-            # Snap to target once we are within 1 degree
-            if abs(target - current) < 1.0:
-                self.move_servo(pin, target)
+            # Snap to target when close (within 0.5 degree)
+            if abs(target - current) < 0.5:
+                if last_sent_angle != target:
+                    self.move_servo(pin, target, sync=True)
                 break
 
-            # Quantise to 1 degree — servo cannot resolve finer than this anyway
-            self.move_servo(pin, round(current))
-            time.sleep(dt)
+            # 0.5-degree quantization for finer control
+            # MG995 dead band = 5us, 1deg = 11.1us, 0.5deg = 5.5us
+            # 0.5deg is just above dead band, providing smoother motion than 1deg
+            quantized_angle = round(current * 2.0) / 2.0
+
+            # Only send command if angle changed (reduces PWM jitter)
+            if quantized_angle != last_sent_angle:
+                self.move_servo(pin, quantized_angle, sync=True)
+                last_sent_angle = quantized_angle
+            else:
+                # No angle change, just wait for next cycle
+                time.sleep(dt)
 
         # Mechanical settle — horn damps overshoot / ringing
         time.sleep(Config.SERVO_SETTLE_TIME_S)
