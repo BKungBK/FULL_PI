@@ -144,8 +144,8 @@ class Config:
     SERVO_SETTLE_TIME_S: float = 0.20        # post-move mechanical damping
     SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
     HOME_VERIFY_DELAY_S: float = 0.40        # extra hold after re-command home (prevents sag)
-    PHOTO_SETTLE_DELAY: float = 0.25         # wait after servo reaches PHOTO_ANGLE
-    FLASH_SETTLE_DELAY: float = 0.20         # wait after flash ON before capture
+    PHOTO_SETTLE_DELAY: float = 1.0          # wait after servo reaches PHOTO_ANGLE (increased for stability)
+    FLASH_SETTLE_DELAY: float = 0.3          # wait after flash ON before capture (increased for exposure)
     HOME_ALL_DELAY_S: float = 0.80           # worst-case full-sweep homing at startup
 
     # ── Reject bin servo angle ───────────────────────────────────────
@@ -1258,11 +1258,11 @@ class SmartBinEngine:
             # Stage 0 — Move capture arm to photo position (120°)
             # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
             hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
-            time.sleep(0.6)  # Wait for servo to fully stabilize before flash
+            time.sleep(Config.PHOTO_SETTLE_DELAY)  # Configurable servo settle time
 
             # Flash ON, wait for light / exposure settle, then capture
             self._send_flash(on=True)
-            time.sleep(0.2)  # Flash settle
+            time.sleep(Config.FLASH_SETTLE_DELAY)  # Configurable flash settle time
             frame = self._capture_http_frame()
             self._send_flash(on=False)
 
