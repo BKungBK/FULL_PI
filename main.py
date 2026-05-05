@@ -6,19 +6,13 @@ Automated waste sorting:
   Stage-2  TFLite INT8 → classify waste type
   Hardware GPIO servos  → sort into correct bin
 
-Pipeline flow (from hand-withdrawal):
-  1. Servo1 (MG995) → PHOTO_ANGLE (120°)  [smooth move]
-  2. Flash ON → wait 1.5s → capture → Flash OFF
-  3. Inference → get waste label
-  4. Servo2 → target bin angle            [smooth move]
-  5. Servo1 → SWEEP_ANGLE (45°)            [tip / drop]
-  6. Reset → all servos home
-
-Servo1 control: smooth_move_servo1()
-  - Linear easing (predictable, no gravity surprises)
-  - No pre-tension (prevents initial tilt-down)
-  - 1-degree quantization (above MG995 dead band)
-  - Slower speed 20°/s (stability over speed)
+Detection timing (from hand-withdrawal):
+  t=0.00s  Hand withdrawn   → Servo1 pre-emptive → 120°
+  t=0.50s  Grab 5 frames    → rolling frame buffer
+  t~0.55s  Inference done   → label determined (5-frame vote)
+  t~0.65s  Sort servo       → Servo2 → target bin angle
+  t=1.00s  Drop             → Servo1 → 45°
+  t=1.50s  Reset            → all servos home
 
 Usage:
     python main.py
@@ -150,8 +144,8 @@ class Config:
     SERVO_SETTLE_TIME_S: float = 0.20        # post-move mechanical damping
     SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
     HOME_VERIFY_DELAY_S: float = 0.40        # extra hold after re-command home (prevents sag)
-    PHOTO_SETTLE_DELAY: float = 1.0          # wait after servo reaches PHOTO_ANGLE (increased for stability)
-    FLASH_SETTLE_DELAY: float = 1.5          # wait after flash ON before capture (1.5s for stable lighting)
+    PHOTO_SETTLE_DELAY: float = 0.5          # wait after servo reaches PHOTO_ANGLE (smooth already settles 0.2s)
+    FLASH_SETTLE_DELAY: float = 1.5          # flash ON duration before capture (user requested 1.5s)
     HOME_ALL_DELAY_S: float = 0.80           # worst-case full-sweep homing at startup
 
     # ── Reject bin servo angle ───────────────────────────────────────
@@ -657,17 +651,16 @@ class HardwareController:
         any sag that occurs while the other servo is still moving.  Only
         then do we sleep HOME_VERIFY_DELAY_S before returning.
         """
-        # Stage 1 — Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
-        # Stage 1 — Servo2: smooth move
-        logger.info("[RETURN_HOME] Servo1 → HOME %.0f°", Config.CAP_HOME_ANGLE)
-        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        time.sleep(0.6)
-        logger.info("[RETURN_HOME] Servo2 → HOME %.0f° (passing through bins)", Config.SORT_HOME_ANGLE)
+        # Stage 1 — Servo1: smooth move back to home
+        # Stage 1 — Servo2: smooth move back to home
+        logger.info("[RETURN_HOME] Servo1 smooth → HOME %.0f°", Config.CAP_HOME_ANGLE)
+        self.smooth_move_servo1(Config.CAP_HOME_ANGLE, speed=50.0)
+        logger.info("[RETURN_HOME] Servo2 smooth → HOME %.0f°", Config.SORT_HOME_ANGLE)
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
-        # Only force Servo2; Servo1 uses normal move to prevent micro-jitter
-        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)      # NO force=True
+        # Use force=True to ensure command is sent even if already at home
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, force=True)
         self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, force=True)
 
         # Stage 3 — hold PWM alive so horn settles under load
@@ -785,94 +778,57 @@ class HardwareController:
             pin, target, start, time.monotonic() - start_time
         )
 
-    def smooth_move_servo1(self, target: float, speed: float = 20.0) -> None:
-        """Smooth move specifically for MG995 Servo1 (pin 18).
+    def smooth_move_servo1(self, target: float, speed: float = 50.0) -> None:
+        """Simple linear smooth move for Servo1 (MG995) — no pre-tension, no S-curve.
 
-        Differences from generic smooth_move:
-        - Linear easing (no S-curve) → predictable, no gravity surprises
-        - NO pre-tension → prevents initial tilt-down
-        - 1-degree quantization (not 0.5) → above MG995 dead band, less jitter
-        - Slower default speed (20°/s vs 30°/s) → stability over speed
-        - hold_ms during movement → maintains torque under load
+        Uses 1-degree steps with PWM sync to minimize jitter.
+        Linear interpolation prevents unpredictable motion profiles.
+        No pre-tension to avoid initial tilt-down issues.
         """
-        pin = Config.SERVO1_PIN
-        start = self._last_angle.get(pin)
-
+        start = self._last_angle.get(Config.SERVO1_PIN)
         if start is None:
-            # Unknown position — safe home first
-            self.warmup_servo(pin)
-            self.move_servo(pin, Config.CAP_HOME_ANGLE, sync=True)
-            time.sleep(Config.HOME_ALL_DELAY_S)
-            start = float(Config.CAP_HOME_ANGLE)
-            self._last_angle[pin] = start
+            start = Config.CAP_HOME_ANGLE
+            self.move_servo(Config.SERVO1_PIN, start, sync=True)
+            time.sleep(0.5)
 
         target = float(round(target))
-        distance = abs(target - start)
-
-        if distance < 1.0:
-            self.move_servo(pin, target, sync=True)
-            time.sleep(Config.SERVO_SETTLE_TIME_S)
+        distance = target - start
+        if abs(distance) < 1.0:
+            self.move_servo(Config.SERVO1_PIN, target, sync=True)
+            time.sleep(0.2)
             return
 
-        duration = distance / speed
-        duration = max(0.3, duration)  # minimum 0.3s for stability
+        # Linear speed control: MG995 ~60°/s at 6V, use 50°/s for safety
+        duration = abs(distance) / speed
+        duration = max(0.2, duration)
 
-        dt = 1.0 / Config.SERVO_UPDATE_HZ  # 20 ms
-        start_time = time.monotonic()
-        last_sent_angle = None
-        direction = 1.0 if target > start else -1.0
+        steps = max(int(abs(distance)), 1)  # 1 degree per step
+        for i in range(1, steps + 1):
+            angle = start + (distance * i / steps)
+            quantized = round(angle)
+            self.move_servo(Config.SERVO1_PIN, quantized, sync=True)
 
-        logger.info("[SERVO1_SMOOTH] start=%.0f° → target=%.0f° (%.1f° in %.2fs)",
-                    start, target, distance, duration)
-
-        while True:
-            elapsed = time.monotonic() - start_time
-            t = min(1.0, elapsed / duration)
-
-            if t >= 1.0:
-                if last_sent_angle != target:
-                    self.move_servo(pin, target, sync=True)
-                break
-
-            # Linear easing: simple and predictable
-            current = start + (target - start) * t
-
-            # 1-degree quantization (above MG995 dead band)
-            quantized_angle = round(current)
-
-            # Only send if changed
-            if quantized_angle != last_sent_angle:
-                self.move_servo(pin, quantized_angle, sync=True)
-                last_sent_angle = quantized_angle
-            else:
-                time.sleep(dt)
-
-        # Done — no force re-command to prevent micro-jitter
         time.sleep(Config.SERVO_SETTLE_TIME_S)
-        logger.info("[SERVO1_SMOOTH] done at %.0f°", target)
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
         Only idles if near Home (92°) unless force=True to prevent dropping heavy loads.
-        NEVER idles Servo1 (MG995) to prevent position loss and oscillation.
+        Marks _last_angle as None so the next move knows position is unknown.
         """
         for pin in (Config.SERVO1_PIN, Config.SERVO2_PIN):
-            # CRITICAL: Never idle Servo1 (pin 18) — it loses position and oscillates
-            if pin == Config.SERVO1_PIN:
-                logger.debug("idle_servos: SKIPPING Servo1 (pin %d) — keeping PWM alive", pin)
-                continue
-
-            home_angle = Config.SORT_HOME_ANGLE
+            home_angle = Config.CAP_HOME_ANGLE if pin == Config.SERVO1_PIN else Config.SORT_HOME_ANGLE
             angle = self._last_angle.get(pin, home_angle)
             if angle is None:
                 angle = home_angle
-
-            # Only idle Servo2 if close to home OR force=True
-            if force or abs(angle - home_angle) < 8.0:
+            # Safe to idle ONLY if at Home or Forced
+            if force or abs(angle - home_angle) < 2.0:
                 try:
-                    lgpio.tx_pwm(self._h, pin, 50, 0)
-                except Exception as exc:
-                    logger.debug("idle_servos pin %d: %s", pin, exc)
+                    lgpio.tx_servo(self._h, pin, 0)
+                except Exception:
+                    try:
+                        lgpio.tx_pwm(self._h, pin, 50, 0)
+                    except Exception as exc:
+                        logger.debug("idle_servos pin %d: %s", pin, exc)
                 self._last_angle[pin] = None   # position now unknown
 
     # ── ultrasonic ────────────────────────────────────────────────────
@@ -1240,8 +1196,8 @@ class SmartBinEngine:
             home_angle = Config.CAP_HOME_ANGLE if name == "capture" else Config.SORT_HOME_ANGLE
             angle = int(cmd.get("angle", home_angle))
             if name == "capture":
-                # Servo1 (MG995): use smooth_move_servo1 for stability
-                hw.smooth_move_servo1(angle)
+                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+                hw.move_servo(Config.SERVO1_PIN, angle)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
                 # Note: Not idling servo1 to prevent oscillation from rapid on/off
             elif name == "sort":
@@ -1250,8 +1206,8 @@ class SmartBinEngine:
                 hw.idle_servos(force=True)
             elif name == "all":
                 # Manual 'all' command (e.g. from Home button)
-                # Servo1: smooth move; Servo2: smooth move
-                hw.smooth_move_servo1(angle)
+                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+                hw.move_servo(Config.SERVO1_PIN, angle)
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
                 # Only idle servo2, keep servo1 active to prevent oscillation
@@ -1334,24 +1290,19 @@ class SmartBinEngine:
         assert hw
 
         try:
-            # === STAGE 0: Photo Capture ===
-            # Servo1 (MG995): smooth move to photo position (120°)
-            logger.info("[FLOW] Stage 0: Servo1 → PHOTO_ANGLE %.0f°", Config.PHOTO_ANGLE)
-            hw.smooth_move_servo1(Config.PHOTO_ANGLE)
-            logger.info("[FLOW] Stage 0: Servo1 at photo position, settling...")
-            time.sleep(Config.PHOTO_SETTLE_DELAY)  # wait for mechanical stability
+            # Stage 0 — Servo1 smooth → PHOTO_ANGLE (120°)
+            # Linear smooth with 1° steps, no pre-tension, PWM sync
+            logger.info("[PIPELINE] Stage 0: Servo1 smooth → %.0f°", Config.PHOTO_ANGLE)
+            hw.smooth_move_servo1(Config.PHOTO_ANGLE, speed=50.0)
+            time.sleep(Config.PHOTO_SETTLE_DELAY)
 
-            # Flash ON, wait 1.5s for stable lighting, then capture
-            logger.info("[FLOW] Stage 0: Flash ON, waiting %.1fs", Config.FLASH_SETTLE_DELAY)
+            # Flash ON, hold for FLASH_SETTLE_DELAY (1.5s), then capture
+            logger.info("[PIPELINE] Flash ON (%.1fs)", Config.FLASH_SETTLE_DELAY)
             self._send_flash(on=True)
             time.sleep(Config.FLASH_SETTLE_DELAY)
             frame = self._capture_http_frame()
             self._send_flash(on=False)
-            logger.info("[FLOW] Stage 0: Photo captured, flash OFF")
-
-            # Log commanded angle at capture moment (open-loop — no feedback)
-            servo1_cmd = hw._last_angle.get(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
-            logger.info("[t=%.3f] Capture frame at servo1_cmd=%.0f°", time.monotonic() - t0, servo1_cmd)
+            logger.info("[PIPELINE] Flash OFF, capture done")
 
             if frame is None:
                 logger.warning("Failed capture — aborting pipeline")
@@ -1361,35 +1312,33 @@ class SmartBinEngine:
             start_ms = time.time() * 1000.0
             label, conf = classify_single_frame(frame)
             elapsed_ms = (time.time() * 1000.0) - start_ms
-
             logger.info("[t=%.3f] Result: %s (conf=%.2f)",
                         time.monotonic() - t0, label, conf)
             self._record_sort(label, conf, elapsed_ms)
 
-            # === STAGE 1: Reset Servo1 to Home (prepare for drop) ===
-            logger.info("[FLOW] Stage 1: Servo1 → HOME %.0f°", Config.CAP_HOME_ANGLE)
-            hw.smooth_move_servo1(Config.CAP_HOME_ANGLE)
-            time.sleep(0.5)
-
-            # === STAGE 2: Rotate Bin to target ===
+            # Stage 1: Rotate Bin (Servo2) — Servo1 stays at PHOTO_ANGLE (120°)
+            # NO unnecessary reset of Servo1 to home before bin rotation
             target_angle = self._label_to_angle(label)
-            logger.info("[FLOW] Stage 2: Servo2 → %s (%.0f°)", label, target_angle)
+            logger.info("[PIPELINE] Stage 1: Servo2 smooth → %s (%.0f°)", label, target_angle)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
-            time.sleep(0.6)
-            logger.info("[FLOW] Stage 2: Bin ready at %.0f°", target_angle)
+            time.sleep(0.3)
+            logger.info("[PIPELINE] Stage 1: Bin at %.0f°", target_angle)
 
-            # === STAGE 3: Drop bottle ===
-            time.sleep(0.2)
-            logger.info("[FLOW] Stage 3: Servo1 → SWEEP %.0f° (tipping)", Config.SWEEP_ANGLE)
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=600)
-            time.sleep(1.2)
-            logger.info("[FLOW] Stage 3: Drop complete — bottle should have fallen")
-            time.sleep(0.5)
+            # Stage 2: Drop — Servo1 smooth → SWEEP_ANGLE (45°)
+            # Smooth motion from 120° → 45° to avoid bottle ejection
+            logger.info("[PIPELINE] Stage 2: Servo1 smooth → %.0f° (drop)", Config.SWEEP_ANGLE)
+            hw.smooth_move_servo1(Config.SWEEP_ANGLE, speed=50.0)
+
+            # Hold at drop position for bottle to fully fall
+            logger.info("[PIPELINE] Stage 2: Holding drop position 1.0s")
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=1000)
+            time.sleep(1.0)
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
         finally:
             # CRITICAL: Always return both servos to Home / Center
+            logger.info("[PIPELINE] Stage 3: Reset all servos home")
             hw.return_to_home()
             hw.idle_servos(force=True)
             logger.info("[t=%.3f] Pipeline finished & Reset", time.monotonic() - t0)
