@@ -586,18 +586,37 @@ class HardwareController:
 
     # ── servo ─────────────────────────────────────────────────────────
 
-    def move_servo(self, pin: int, angle: float, sync: bool = False) -> None:
+    def move_servo(self, pin: int, angle: float, sync: bool = False, 
+                   hold_ms: int = 0, force: bool = False) -> None:
         """Set servo to *angle* degrees (clamped 0–180).
 
         Args:
             pin: GPIO pin number
             angle: Target angle in degrees (0-180)
             sync: If True, wait for PWM period to complete before returning
+            hold_ms: If > 0, re-send PWM every 20ms for hold_ms milliseconds
+                     (helps maintain torque during heavy load)
+            force: If False, skip if already at target angle (prevents oscillation)
         """
         angle = max(0.0, min(180.0, angle))
+        
+        # Skip if already at target (prevents redundant commands causing oscillation)
+        if not force:
+            current = self._last_angle.get(pin)
+            if current is not None and abs(current - angle) < 1.0:
+                return  # Already at target, skip
+        
         pulse_us = int(500 + (angle / 180.0) * 2000)
         lgpio.tx_servo(self._h, pin, pulse_us)
         self._last_angle[pin] = angle
+        
+        # Hold torque: re-send PWM repeatedly during heavy load
+        if hold_ms > 0:
+            start = time.monotonic()
+            while (time.monotonic() - start) * 1000 < hold_ms:
+                lgpio.tx_servo(self._h, pin, pulse_us)
+                time.sleep(0.02)  # 50Hz refresh
+        
         if sync:
             time.sleep(0.021)  # รอ 1 PWM period (20ms) + 1ms safety margin
 
@@ -637,8 +656,9 @@ class HardwareController:
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
-        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE)
+        # Use force=True to ensure command is sent even if already at home
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, force=True)
+        self.move_servo(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, force=True)
 
         # Stage 3 — hold PWM alive so horn settles under load
         time.sleep(Config.HOME_VERIFY_DELAY_S)
@@ -1144,7 +1164,7 @@ class SmartBinEngine:
                 # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
                 hw.move_servo(Config.SERVO1_PIN, angle)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
-                hw.idle_servos(force=True)
+                # Note: Not idling servo1 to prevent oscillation from rapid on/off
             elif name == "sort":
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
@@ -1155,7 +1175,8 @@ class SmartBinEngine:
                 hw.move_servo(Config.SERVO1_PIN, angle)
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
-                hw.idle_servos(force=True)
+                # Only idle servo2, keep servo1 active to prevent oscillation
+                hw.idle_servos(force=False)
         elif action == "flash":
             self._send_flash(on=bool(cmd.get("on", False)))
         elif action == "mode":
@@ -1273,8 +1294,8 @@ class SmartBinEngine:
 
             # Stage 3: Drop (Servo 1) — direct move with jiggle to help bottle fall
             time.sleep(0.2)  # Gap after bin rotation
-            # Move to tip position
-            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)
+            # Move to tip position with hold torque (re-send PWM during load)
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE, hold_ms=600)
             time.sleep(0.6)  # Wait for bottle to start sliding
             # Jiggle: small oscillation to help bottle fall
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE + 5)  # 50°
