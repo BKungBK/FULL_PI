@@ -630,8 +630,9 @@ class HardwareController:
         any sag that occurs while the other servo is still moving.  Only
         then do we sleep HOME_VERIFY_DELAY_S before returning.
         """
-        # Stage 1 — smooth move to home (conservative speed)
-        self.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=30.0)
+        # Stage 1 — Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+        # Stage 1 — Servo2: smooth move
+        self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
@@ -1139,7 +1140,8 @@ class SmartBinEngine:
             home_angle = Config.CAP_HOME_ANGLE if name == "capture" else Config.SORT_HOME_ANGLE
             angle = int(cmd.get("angle", home_angle))
             if name == "capture":
-                hw.smooth_move(Config.SERVO1_PIN, angle, speed=30.0)
+                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+                hw.move_servo(Config.SERVO1_PIN, angle)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
                 hw.idle_servos(force=True)
             elif name == "sort":
@@ -1148,7 +1150,8 @@ class SmartBinEngine:
                 hw.idle_servos(force=True)
             elif name == "all":
                 # Manual 'all' command (e.g. from Home button)
-                hw.smooth_move(Config.SERVO1_PIN, angle, speed=30.0)
+                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+                hw.move_servo(Config.SERVO1_PIN, angle)
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
                 time.sleep(Config.SERVO_HOLD_TIME_S)
                 hw.idle_servos(force=True)
@@ -1196,8 +1199,8 @@ class SmartBinEngine:
                 # Servo 2 (Sort): Slow and steady to stop swaying
                 hw.smooth_move(Config.SERVO2_PIN, target, speed=30.0)
                 time.sleep(0.3)
-                # Servo 1 (Capture): conservative speed for loaded arm
-                hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
+                # Servo 1 (Capture): direct move (no smoothing due to mechanical issues)
+                hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)
                 time.sleep(0.5)
             except Exception as exc:
                 logger.error("Manual sort servo error: %s", exc)
@@ -1231,10 +1234,9 @@ class SmartBinEngine:
 
         try:
             # Stage 0 — Move capture arm to photo position (120°)
-            # smooth_move already includes SERVO_SETTLE_TIME_S after reaching target
-            hw.smooth_move(Config.SERVO1_PIN, Config.PHOTO_ANGLE, speed=35.0)
-            # Extra settle specifically for the capture arm (mechanical load may vary)
-            time.sleep(Config.PHOTO_SETTLE_DELAY)
+            # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+            hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
+            time.sleep(0.3)  # Wait for direct servo move to complete
 
             # Flash ON, wait for light / exposure settle, then capture
             self._send_flash(on=True)
@@ -1259,17 +1261,17 @@ class SmartBinEngine:
                         time.monotonic() - t0, label, conf)
             self._record_sort(label, conf, elapsed_ms)
 
-            # Stage 1: Reset Arm to Neutral
-            hw.smooth_move(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE, speed=30.0)
+            # Stage 1: Reset Arm to Neutral (Servo1: direct move)
+            hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
 
             # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
 
-            # Stage 3: Drop (Servo 1)
+            # Stage 3: Drop (Servo 1) — direct move (no smoothing)
             time.sleep(0.2)
-            hw.smooth_move(Config.SERVO1_PIN, Config.SWEEP_ANGLE, speed=30.0)
-            time.sleep(0.6)
+            hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)
+            time.sleep(0.4)  # Shorter wait for direct move
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
