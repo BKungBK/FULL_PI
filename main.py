@@ -630,11 +630,10 @@ class HardwareController:
         any sag that occurs while the other servo is still moving.  Only
         then do we sleep HOME_VERIFY_DELAY_S before returning.
         """
-        # Stage 1 — Servo1 (pin 18): direct move then idle (prevents jitter)
+        # Stage 1 — Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
+        # Stage 1 — Servo2: smooth move
         self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
         time.sleep(0.25)  # Settle time for Servo1
-        self.idle_servo_keep_position(Config.SERVO1_PIN)  # Stop PWM, keep position
-        # Stage 1 — Servo2: smooth move (Servo1 stays idle and still)
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
@@ -755,22 +754,6 @@ class HardwareController:
             "Servo pin=%d target=%.0f° start=%.0f° duration=%.2fs",
             pin, target, start, time.monotonic() - start_time
         )
-
-    def idle_servo_keep_position(self, pin: int) -> None:
-        """Stop PWM signal but KEEP position memory.
-
-        Use this between stages when you want the servo to be completely still
-        but remember its position for the next move. Unlike idle_servos(),
-        this does NOT clear _last_angle.
-        """
-        try:
-            lgpio.tx_servo(self._h, pin, 0)  # Stop PWM
-        except Exception:
-            try:
-                lgpio.tx_pwm(self._h, pin, 50, 0)
-            except Exception as exc:
-                logger.debug("idle_servo_keep_position pin %d: %s", pin, exc)
-        # Note: _last_angle[pin] is NOT cleared, so next move knows position
 
     def idle_servos(self, force: bool = False) -> None:
         """Stop PWM signal to reduce servo heat.
@@ -1158,12 +1141,9 @@ class SmartBinEngine:
             home_angle = Config.CAP_HOME_ANGLE if name == "capture" else Config.SORT_HOME_ANGLE
             angle = int(cmd.get("angle", home_angle))
             if name == "capture":
-                # Servo1 (pin 18): direct move then idle to prevent jitter
+                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
                 hw.move_servo(Config.SERVO1_PIN, angle)
-                time.sleep(0.25)  # Settle time
-                hw.idle_servo_keep_position(Config.SERVO1_PIN)  # Stop PWM but remember position
-                time.sleep(Config.SERVO_HOLD_TIME_S - 0.25)  # Remaining hold time
-                # Final idle with position clear
+                time.sleep(Config.SERVO_HOLD_TIME_S)
                 hw.idle_servos(force=True)
             elif name == "sort":
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
@@ -1171,12 +1151,10 @@ class SmartBinEngine:
                 hw.idle_servos(force=True)
             elif name == "all":
                 # Manual 'all' command (e.g. from Home button)
-                # Servo1 (pin 18): direct move, idle, then hold
+                # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
                 hw.move_servo(Config.SERVO1_PIN, angle)
-                time.sleep(0.25)
-                hw.idle_servo_keep_position(Config.SERVO1_PIN)  # Prevent jitter
                 hw.smooth_move(Config.SERVO2_PIN, angle, speed=30.0)
-                time.sleep(Config.SERVO_HOLD_TIME_S - 0.25)
+                time.sleep(Config.SERVO_HOLD_TIME_S)
                 hw.idle_servos(force=True)
         elif action == "flash":
             self._send_flash(on=bool(cmd.get("on", False)))
@@ -1219,15 +1197,11 @@ class SmartBinEngine:
             logger.info("Manual sort triggered: %s", cls)
             target = self._label_to_angle(cls)
             try:
-                # Servo 1 (Capture): Idle first while Servo2 moves (prevents jitter)
-                hw.idle_servo_keep_position(Config.SERVO1_PIN)
                 # Servo 2 (Sort): Slow and steady to stop swaying
                 hw.smooth_move(Config.SERVO2_PIN, target, speed=30.0)
                 time.sleep(0.3)
-                # Servo 1 (Capture): Re-activate and dump
-                hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)  # Re-activate
-                time.sleep(0.03)
-                hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)  # Drop
+                # Servo 1 (Capture): direct move (no smoothing due to mechanical issues)
+                hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)
                 time.sleep(0.5)
             except Exception as exc:
                 logger.error("Manual sort servo error: %s", exc)
@@ -1263,9 +1237,7 @@ class SmartBinEngine:
             # Stage 0 — Move capture arm to photo position (120°)
             # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
             hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
-            time.sleep(0.25)  # Settle at photo position
-            # IDLE PWM to eliminate jitter during inference
-            hw.idle_servo_keep_position(Config.SERVO1_PIN)
+            time.sleep(0.3)  # Wait for direct servo move to complete
 
             # Flash ON, wait for light / exposure settle, then capture
             self._send_flash(on=True)
@@ -1281,7 +1253,7 @@ class SmartBinEngine:
                 logger.warning("Failed capture — aborting pipeline")
                 return
 
-            # Inference (SERVO1 is IDLE - no jitter)
+            # Inference
             start_ms = time.time() * 1000.0
             label, conf = classify_single_frame(frame)
             elapsed_ms = (time.time() * 1000.0) - start_ms
@@ -1290,32 +1262,24 @@ class SmartBinEngine:
                         time.monotonic() - t0, label, conf)
             self._record_sort(label, conf, elapsed_ms)
 
-            # Stage 1: Reset Arm to Neutral (Servo1: re-activate and move)
-            # Re-activate PWM by sending current position first
-            hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)  # Re-activate
-            time.sleep(0.03)  # Small delay for PWM to stabilize
-            hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)  # Move to home
-            time.sleep(0.25)  # Settle at home position
-            # IDLE PWM while Servo2 is working (eliminates jitter)
-            hw.idle_servo_keep_position(Config.SERVO1_PIN)
+            # Stage 1: Reset Arm to Neutral (Servo1: direct move)
+            hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
+            time.sleep(0.25)  # Settle time for servo to stabilize
 
-            # Stage 2: Rotate Bin (Servo 2) - SERVO1 stays IDLE and still
+            # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
 
-            # Stage 3: Drop (Servo 1) — re-activate and dump
-            time.sleep(0.1)
-            # Re-activate PWM by sending current position
-            hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)  # Re-activate
-            time.sleep(0.03)  # PWM stabilize
-            # Move to tip position for drop
+            # Stage 3: Drop (Servo 1) — direct move with jiggle to help bottle fall
+            time.sleep(0.2)
+            # Move to tip position
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)
             time.sleep(0.5)  # Wait for bottle to start sliding
             # Jiggle: small oscillation to help bottle fall
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE + 5)  # 50°
             time.sleep(0.15)
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)    # Back to 45°
-            time.sleep(0.8)  # Wait for bottle to fully drop
+            time.sleep(0.8)  # Wait for bottle to fully drop (increased from 0.4s)
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
