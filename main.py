@@ -633,7 +633,7 @@ class HardwareController:
         # Stage 1 — Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
         # Stage 1 — Servo2: smooth move
         self.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-        time.sleep(0.25)  # Settle time for Servo1
+        time.sleep(0.6)  # Wait for Servo1 to stabilize
         self.smooth_move(Config.SERVO2_PIN, Config.SORT_HOME_ANGLE, speed=30.0)
 
         # Stage 2 — re-command exact home pulse (catches gravity sag)
@@ -1237,11 +1237,11 @@ class SmartBinEngine:
             # Stage 0 — Move capture arm to photo position (120°)
             # Servo1 (pin 18): direct move (no smoothing due to mechanical issues)
             hw.move_servo(Config.SERVO1_PIN, Config.PHOTO_ANGLE)
-            time.sleep(0.3)  # Wait for direct servo move to complete
+            time.sleep(0.6)  # Wait for servo to fully stabilize before flash
 
             # Flash ON, wait for light / exposure settle, then capture
             self._send_flash(on=True)
-            time.sleep(Config.FLASH_SETTLE_DELAY)
+            time.sleep(0.2)  # Flash settle
             frame = self._capture_http_frame()
             self._send_flash(on=False)
 
@@ -1264,22 +1264,23 @@ class SmartBinEngine:
 
             # Stage 1: Reset Arm to Neutral (Servo1: direct move)
             hw.move_servo(Config.SERVO1_PIN, Config.CAP_HOME_ANGLE)
-            time.sleep(0.25)  # Settle time for servo to stabilize
+            time.sleep(0.6)  # Wait for servo to fully stabilize
 
             # Stage 2: Rotate Bin (Servo 2)
             target_angle = self._label_to_angle(label)
             hw.smooth_move(Config.SERVO2_PIN, target_angle, speed=30.0)
+            time.sleep(0.6)  # Wait for bin rotation to complete
 
             # Stage 3: Drop (Servo 1) — direct move with jiggle to help bottle fall
-            time.sleep(0.2)
+            time.sleep(0.2)  # Gap after bin rotation
             # Move to tip position
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)
-            time.sleep(0.5)  # Wait for bottle to start sliding
+            time.sleep(0.6)  # Wait for bottle to start sliding
             # Jiggle: small oscillation to help bottle fall
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE + 5)  # 50°
-            time.sleep(0.15)
+            time.sleep(0.2)
             hw.move_servo(Config.SERVO1_PIN, Config.SWEEP_ANGLE)    # Back to 45°
-            time.sleep(0.8)  # Wait for bottle to fully drop (increased from 0.4s)
+            time.sleep(0.8)  # Wait for bottle to fully drop
 
         except Exception as exc:
             logger.error("Detection pipeline crashed: %s", exc)
