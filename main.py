@@ -131,7 +131,7 @@ class Config:
     DETECT_DISTANCE_CM: float = 10.0
     HAND_WITHDRAWN_DISTANCE_CM: float = 20.0   # hysteresis for release
     BIN_FULL_DISTANCE_CM: float = 10.0
-    COOLDOWN_SECONDS: float = 5.0
+    COOLDOWN_SECONDS: float = 2.0
     MIN_CONFIDENCE_THRESHOLD: float = 0.50     # minimum score before reject
     UNCERTAINTY_REJECT_THRESHOLD: float = 0.30  # if 2+ classes exceed this → reject
     CAMERA_RECONNECT_DELAY: float = 1.0
@@ -143,11 +143,11 @@ class Config:
     SERVO_UPDATE_HZ: float = 50.0            # match PWM period (20 ms)
     SERVO_SETTLE_TIME_S: float = 0.20        # post-move mechanical damping
     SERVO_HOLD_TIME_S: float = 0.30          # keep PWM alive after reaching target
-    HOME_VERIFY_DELAY_S: float = 0.40        # extra hold after re-command home (prevents sag)
+    HOME_VERIFY_DELAY_S: float = 0.20        # extra hold after re-command home (prevents sag)
     PHOTO_SETTLE_DELAY: float = 1.0          # wait after servo reaches PHOTO_ANGLE
     FLASH_SETTLE_DELAY: float = 1.5          # Flash ON duration before capture
     TIP_HOLD_TIME_S: float = 1.5             # hold tip position for bottle to drop
-    BIN_ROTATE_WAIT_S: float = 0.8            # wait after bin rotation before tipping
+    BIN_ROTATE_WAIT_S: float = 0.5            # wait after bin rotation before tipping
     HOME_ALL_DELAY_S: float = 0.80           # worst-case full-sweep homing at startup
 
     # ── Reject bin servo angle ───────────────────────────────────────
