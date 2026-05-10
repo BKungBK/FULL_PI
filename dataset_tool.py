@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import logging
 import os
 import time
+import zipfile
 from pathlib import Path
 from typing import List, Tuple
 
@@ -41,7 +43,7 @@ from pydantic import BaseModel
 # ── Config ────────────────────────────────────────────────────────────
 ESP32_IP    = os.environ.get("ESP32_IP", "10.42.0.177")
 DATASET_DIR = Path(__file__).parent / "dataset"
-LABELS      = ("plastic", "metal", "glass")
+LABELS      = ("plastic", "metal", "glass", "reject")
 OUTPUT_SIZE = 224
 PORT        = 8001
 AUGMENT_ENABLED = True   # False = save originals only
@@ -365,6 +367,46 @@ async def delete_image(label: str, filename: str):
             logger.info("Deleted %s/%s", label, safe)
 
     return JSONResponse({"success": True, "counts": _get_counts()})
+
+
+def _build_zip() -> io.BytesIO:
+    """Blocking zip builder — called inside thread pool."""
+    buf = io.BytesIO()
+    file_count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for folder in DATASET_DIR.iterdir():
+            if folder.is_dir() and folder.name in LABELS:
+                for file in folder.glob("*.jpg"):
+                    arcname = f"{folder.name}/{file.name}"
+                    zf.write(file, arcname)
+                    file_count += 1
+        # Include labels.txt if it exists next to the script
+        labels_file = Path(__file__).parent / "labels.txt"
+        if labels_file.exists():
+            zf.write(labels_file, "labels.txt")
+            file_count += 1
+    buf.seek(0)
+    logger.info("Compressed dataset: %d files → %d bytes", file_count, buf.getbuffer().nbytes)
+    return buf
+
+
+@app.get("/compress")
+async def compress_dataset():
+    """Zip the entire dataset directory and return as a download."""
+    try:
+        buf = await asyncio.to_thread(_build_zip)
+    except Exception as exc:
+        logger.error("Dataset compression failed: %s", exc)
+        return JSONResponse({"error": "Compression failed"}, status_code=500)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="smartbin_dataset_{int(time.time())}.zip"',
+            "Content-Length": str(buf.getbuffer().nbytes),
+        },
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
